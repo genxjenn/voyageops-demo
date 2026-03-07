@@ -74,7 +74,7 @@ export interface AgentRecommendation {
   dataSourcesUsed: string[];
   confidence: number;
   impact: "high" | "medium" | "low";
-  status: "pending" | "approved" | "rejected" | "executed";
+  status: "pending" | "approved" | "rejected" | "executed" | "reviewing";
   actions: RecommendedAction[];
   createdAt: string;
   relatedEntityId?: string;
