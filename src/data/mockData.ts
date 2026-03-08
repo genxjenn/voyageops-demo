@@ -144,8 +144,8 @@ export const guests: Guest[] = [
   },
   {
     id: "G-10424",
-    name: "Sophia & Marco Rossi",
-    email: "s.rossi@email.com",
+    name: "Sophia & Marco Stark",
+    email: "s.stark@email.com",
     loyaltyTier: "Platinum",
     loyaltyNumber: "PLT-112087",
     cabinNumber: "A-102",
