@@ -1,6 +1,7 @@
 import { KPICard } from "@/components/KPICard";
 import { StatusBadge } from "@/components/StatusBadge";
 import { RecommendationCard } from "@/components/RecommendationCard";
+import { SatisfactionTrendsChart, RevenueProtectedChart, AgentConfidenceChart } from "@/components/DashboardCharts";
 import { dashboardKPIs, shipInfo, incidents, agentRecommendations, excursions, venues } from "@/data/mockData";
 import { Ship, MapPin, Users, Anchor, Cloud, Waves, AlertTriangle, ArrowRight } from "lucide-react";
 import { Link } from "react-router-dom";
