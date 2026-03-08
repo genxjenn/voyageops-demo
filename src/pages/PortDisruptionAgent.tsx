@@ -1,5 +1,6 @@
 import { RecommendationCard } from "@/components/RecommendationCard";
 import { AgentTimeline } from "@/components/AgentTimeline";
+import { AgentChat } from "@/components/AgentChat";
 import { StatusBadge } from "@/components/StatusBadge";
 import { excursions, agentRecommendations, portDisruptionTimeline, shipInfo, guests } from "@/data/mockData";
 import { CloudRain, MapPin, Users, DollarSign, AlertTriangle, Calendar } from "lucide-react";
@@ -140,6 +141,9 @@ const PortDisruptionAgent = () => {
           </div>
         </div>
       </div>
+
+      {/* NLP Chat Interface */}
+      <AgentChat agentType="port-disruption" className="h-[520px]" />
     </div>
   );
 };

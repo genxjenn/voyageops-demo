@@ -1,5 +1,6 @@
 import { RecommendationCard } from "@/components/RecommendationCard";
 import { AgentTimeline } from "@/components/AgentTimeline";
+import { AgentChat } from "@/components/AgentChat";
 import { StatusBadge } from "@/components/StatusBadge";
 import { guests, incidents, agentRecommendations, guestRecoveryTimeline } from "@/data/mockData";
 import { User, Crown, CreditCard, Ship, MessageSquare, Star } from "lucide-react";
@@ -124,6 +125,9 @@ const GuestRecoveryAgent = () => {
           </div>
         </div>
       </div>
+
+      {/* NLP Chat Interface */}
+      <AgentChat agentType="guest-recovery" className="h-[520px]" />
     </div>
   );
 };
