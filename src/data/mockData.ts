@@ -111,8 +111,8 @@ export interface OperationalKPI {
 export const guests: Guest[] = [
   {
     id: "G-10421",
-    name: "Margaret Chen",
-    email: "m.chen@email.com",
+    name: "Jane Doe",
+    email: "j.doe@email.com",
     loyaltyTier: "Platinum",
     loyaltyNumber: "PLT-882901",
     cabinNumber: "A-214",
