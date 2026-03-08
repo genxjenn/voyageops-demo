@@ -60,7 +60,7 @@ const Architecture = () => {
       title: "Application Layer",
       icon: Layers,
       color: "text-foreground border-border",
-      current: "React SPA with mock data, Lovable-hosted",
+      current: "React SPA with mock data, cloud-hosted",
       future: [
         "React frontend (current) with real-time subscriptions",
         "API gateway for agent orchestration endpoints",
