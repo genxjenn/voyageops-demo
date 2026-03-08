@@ -6,26 +6,26 @@
 
 @layer base {
   :root {
-    --background: 222 30% 6%;
-    --foreground: 210 20% 90%;
+    --background: 0 0% 100%;
+    --foreground: 215 15% 18%;
 
-    --card: 220 25% 10%;
-    --card-foreground: 210 20% 90%;
+    --card: 0 0% 98%;
+    --card-foreground: 215 15% 18%;
 
-    --popover: 220 25% 12%;
-    --popover-foreground: 210 20% 90%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 215 15% 18%;
 
     --primary: 185 70% 45%;
-    --primary-foreground: 220 30% 6%;
+    --primary-foreground: 0 0% 100%;
 
-    --secondary: 220 20% 16%;
-    --secondary-foreground: 210 15% 75%;
+    --secondary: 215 15% 92%;
+    --secondary-foreground: 215 15% 20%;
 
-    --muted: 220 20% 14%;
-    --muted-foreground: 215 15% 55%;
+    --muted: 215 15% 88%;
+    --muted-foreground: 215 15% 45%;
 
-    --accent: 185 60% 35%;
-    --accent-foreground: 210 20% 95%;
+    --accent: 185 70% 45%;
+    --accent-foreground: 0 0% 100%;
 
     --destructive: 0 72% 55%;
     --destructive-foreground: 0 0% 100%;
@@ -39,19 +39,19 @@
     --info: 210 80% 55%;
     --info-foreground: 210 80% 10%;
 
-    --border: 220 20% 18%;
-    --input: 220 20% 18%;
+    --border: 215 15% 90%;
+    --input: 215 15% 92%;
     --ring: 185 70% 45%;
 
     --radius: 0.5rem;
 
-    --sidebar-background: 222 30% 8%;
-    --sidebar-foreground: 210 15% 65%;
+    --sidebar-background: 215 15% 96%;
+    --sidebar-foreground: 215 15% 35%;
     --sidebar-primary: 185 70% 45%;
-    --sidebar-primary-foreground: 220 30% 6%;
-    --sidebar-accent: 220 20% 14%;
-    --sidebar-accent-foreground: 210 20% 90%;
-    --sidebar-border: 220 20% 14%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 215 15% 90%;
+    --sidebar-accent-foreground: 215 15% 20%;
+    --sidebar-border: 215 15% 88%;
     --sidebar-ring: 185 70% 45%;
 
     --chart-1: 185 70% 45%;
@@ -61,8 +61,8 @@
     --chart-5: 0 72% 55%;
 
     --gradient-primary: linear-gradient(135deg, hsl(185 70% 45%), hsl(200 80% 50%));
-    --gradient-card: linear-gradient(135deg, hsl(220 25% 11%), hsl(220 25% 9%));
-    --shadow-glow: 0 0 20px hsl(185 70% 45% / 0.15);
+    --gradient-card: linear-gradient(135deg, hsl(215 15% 97%), hsl(215 15% 96%));
+    --shadow-glow: 0 0 20px hsl(185 70% 45% / 0.1);
   }
 }
 
@@ -107,7 +107,7 @@
 
   .scrollbar-thin {
     scrollbar-width: thin;
-    scrollbar-color: hsl(220 20% 18%) transparent;
+    scrollbar-color: hsl(215 15% 88%) transparent;
   }
 
   .scrollbar-thin::-webkit-scrollbar {
@@ -119,7 +119,7 @@
   }
 
   .scrollbar-thin::-webkit-scrollbar-thumb {
-    background-color: hsl(220 20% 22%);
+    background-color: hsl(215 15% 85%);
     border-radius: 3px;
   }
 }
