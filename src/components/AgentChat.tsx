@@ -164,6 +164,20 @@ export function AgentChat({ agentType = "general", className }: AgentChatProps) 
     setTimeout(() => simulateStreaming(response, assistantId), 400);
   }, [input, isStreaming, agentType, simulateStreaming]);
 
+  // Keep ref in sync and listen for guided demo events
+  handleSendRef.current = handleSend;
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.agentType === agentType && detail?.query) {
+        setTimeout(() => handleSendRef.current(detail.query), 300);
+      }
+    };
+    window.addEventListener("guided-demo-query", handler);
+    return () => window.removeEventListener("guided-demo-query", handler);
+  }, [agentType]);
+
   const agentLabels: Record<string, string> = {
     "general": "VoyageOps AI",
     "guest-recovery": "Guest Recovery Agent",
