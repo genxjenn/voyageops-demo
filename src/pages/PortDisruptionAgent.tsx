@@ -15,6 +15,9 @@ const PortDisruptionAgent = () => {
         <p className="text-sm text-muted-foreground mt-0.5">Monitor itinerary disruptions, assess impact, and coordinate rebooking and communications</p>
       </div>
 
+      {/* NLP Chat Interface */}
+      <AgentChat agentType="port-disruption" className="h-[520px]" />
+
       <div className="grid gap-6 lg:grid-cols-3">
         {/* Left - Itinerary & Weather */}
         <div className="space-y-4">
