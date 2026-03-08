@@ -1,9 +1,11 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Send, Bot, User, Sparkles, Loader2, RotateCcw } from "lucide-react";
+import { Send, Bot, User, Sparkles, Loader2, RotateCcw, Copy, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import ReactMarkdown from "react-markdown";
 import { guests, incidents, excursions, venues, agentRecommendations, shipInfo } from "@/data/mockData";
+import { format } from "date-fns";
+import { toast } from "sonner";
 
 interface ChatMessage {
   id: string;
