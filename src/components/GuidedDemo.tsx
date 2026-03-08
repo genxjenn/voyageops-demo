@@ -91,7 +91,7 @@ export function GuidedDemo() {
   const [isOpen, setIsOpen] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
   const [hasCompleted, setHasCompleted] = useState(false);
-  const [demoFired, setDemoFired] = useState<Record<number, boolean>>({});
+  const [demoFired, setDemoFired] = useState<Record<string, boolean>>({});
   const navigate = useNavigate();
 
   const step = demoSteps[currentStep];
