@@ -303,9 +303,9 @@ export const agentRecommendations: AgentRecommendation[] = [
   {
     id: "REC-002",
     agentType: "guest-recovery",
-    title: "Suite Recovery: Rossi Family (Platinum)",
+    title: "Suite Recovery: Stark Family (Platinum)",
     summary: "Platinum suite guests experienced critical AC failure. Temporary relocation required. Recommend aggressive recovery given suite-level booking value.",
-    reasoning: "Agent analyzed: cabin maintenance logs, guest profile (18 voyages, $6,340 current spend), booking value ($12,400 suite), weather data (exterior temp 88°F), and maintenance ETA (part arrival: 18 hours). The Rossis represent top 1% guest value. Suite-level service failures have 42% rebooking risk.",
+    reasoning: "Agent analyzed: cabin maintenance logs, guest profile (18 voyages, $6,340 current spend), booking value ($12,400 suite), weather data (exterior temp 88°F), and maintenance ETA (part arrival: 18 hours). The Starks represent top 1% guest value. Suite-level service failures have 42% rebooking risk.",
     dataSourcesUsed: ["Maintenance System", "Guest Profile", "Cabin Sensors", "Weather API", "Parts Inventory"],
     confidence: 97,
     impact: "high",
