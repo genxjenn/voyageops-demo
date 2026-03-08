@@ -15,6 +15,9 @@ const OnboardOpsAgent = () => {
         <p className="text-sm text-muted-foreground mt-0.5">Monitor venue demand, staffing, and maintenance to optimize guest experience in real time</p>
       </div>
 
+      {/* NLP Chat Interface */}
+      <AgentChat agentType="onboard-ops" className="h-[520px]" />
+
       <div className="grid gap-6 lg:grid-cols-3">
         {/* Left - Venue Status */}
         <div className="space-y-4">
@@ -108,9 +111,6 @@ const OnboardOpsAgent = () => {
           </div>
         </div>
       </div>
-
-      {/* NLP Chat Interface */}
-      <AgentChat agentType="onboard-ops" className="h-[520px]" />
     </div>
   );
 };

@@ -17,6 +17,9 @@ const GuestRecoveryAgent = () => {
         <p className="text-sm text-muted-foreground mt-0.5">Detect service failures, correlate guest data, and recommend recovery actions</p>
       </div>
 
+      {/* NLP Chat Interface */}
+      <AgentChat agentType="guest-recovery" className="h-[520px]" />
+
       <div className="grid gap-6 lg:grid-cols-3">
         {/* Left Column - Guest Profile & Incident */}
         <div className="space-y-4">
@@ -125,9 +128,6 @@ const GuestRecoveryAgent = () => {
           </div>
         </div>
       </div>
-
-      {/* NLP Chat Interface */}
-      <AgentChat agentType="guest-recovery" className="h-[520px]" />
     </div>
   );
 };
