@@ -111,9 +111,6 @@ const OnboardOpsAgent = () => {
           </div>
         </div>
       </div>
-
-      {/* NLP Chat Interface */}
-      <AgentChat agentType="onboard-ops" className="h-[520px]" />
     </div>
   );
 };
