@@ -95,7 +95,7 @@ function getMockResponse(input: string, agentType: string): string {
 
 const SUGGESTED_QUERIES: Record<string, string[]> = {
   "general": ["Show ship status", "List active recommendations", "What incidents are open?"],
-  "guest-recovery": ["Analyze Margaret Chen's incident", "Show Rossi family recovery plan", "List all active incidents"],
+  "guest-recovery": ["Analyze Jane Doe's incident", "Show Stark family recovery plan", "List all active incidents"],
   "port-disruption": ["Santorini weather disruption status", "What happened with Crete excursion?", "Show all excursion status"],
   "onboard-ops": ["Dining capacity status", "Pool deck and spa status", "Show all venue overview"],
 };
