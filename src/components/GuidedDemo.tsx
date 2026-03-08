@@ -1,9 +1,9 @@
 import { useState, useEffect } from "react";
-import { useNavigate, useLocation } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { 
-  Play, X, ChevronRight, ChevronLeft, LayoutDashboard, UserCheck, 
-  Ship, Settings2, Sparkles, CheckCircle2 
+import {
+  Play, X, ChevronRight, ChevronLeft, LayoutDashboard, UserCheck,
+  Ship, Settings2, Sparkles, CheckCircle2, MessageSquare, Zap
 } from "lucide-react";
 
 interface DemoStep {
@@ -11,8 +11,9 @@ interface DemoStep {
   description: string;
   route: string;
   icon: React.ElementType;
-  highlight?: string;
   details: string[];
+  demoQuery?: string;
+  agentType?: string;
 }
 
 const demoSteps: DemoStep[] = [
@@ -33,6 +34,8 @@ const demoSteps: DemoStep[] = [
     description: "AI-powered detection and resolution of guest service failures.",
     route: "/guest-recovery",
     icon: UserCheck,
+    agentType: "guest-recovery",
+    demoQuery: "Analyze Margaret Chen's incident",
     details: [
       "Monitors all guest interactions for service failures in real time",
       "Automatically calculates compensation using sentiment analysis and guest value",
@@ -45,6 +48,8 @@ const demoSteps: DemoStep[] = [
     description: "Proactive management of port disruptions and excursion rebooking.",
     route: "/port-disruption",
     icon: Ship,
+    agentType: "port-disruption",
+    demoQuery: "Santorini weather disruption status",
     details: [
       "Integrates weather, port authority, and vendor data for disruption prediction",
       "Auto-generates alternative excursion options when cancellations occur",
@@ -57,6 +62,8 @@ const demoSteps: DemoStep[] = [
     description: "Real-time optimization of venue capacity, staffing, and maintenance.",
     route: "/onboard-ops",
     icon: Settings2,
+    agentType: "onboard-ops",
+    demoQuery: "Dining capacity status",
     details: [
       "Live venue utilization monitoring with occupancy and wait-time tracking",
       "Intelligent staff redeployment recommendations based on demand patterns",
@@ -70,8 +77,8 @@ export function GuidedDemo() {
   const [isOpen, setIsOpen] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
   const [hasCompleted, setHasCompleted] = useState(false);
+  const [demoFired, setDemoFired] = useState<Record<number, boolean>>({});
   const navigate = useNavigate();
-  const location = useLocation();
 
   const step = demoSteps[currentStep];
   const progress = ((currentStep + 1) / demoSteps.length) * 100;
@@ -82,6 +89,19 @@ export function GuidedDemo() {
     }
   }, [currentStep, isOpen]);
 
+  const fireDemoQuery = () => {
+    if (!step.demoQuery || demoFired[currentStep]) return;
+    setDemoFired(prev => ({ ...prev, [currentStep]: true }));
+    // Dispatch custom event for AgentChat to pick up
+    setTimeout(() => {
+      window.dispatchEvent(
+        new CustomEvent("guided-demo-query", {
+          detail: { query: step.demoQuery, agentType: step.agentType },
+        })
+      );
+    }, 600);
+  };
+
   const handleNext = () => {
     if (currentStep < demoSteps.length - 1) {
       setCurrentStep(currentStep + 1);
@@ -91,6 +111,7 @@ export function GuidedDemo() {
         setIsOpen(false);
         setCurrentStep(0);
         setHasCompleted(false);
+        setDemoFired({});
       }, 2500);
     }
   };
@@ -103,9 +124,9 @@ export function GuidedDemo() {
     setIsOpen(false);
     setCurrentStep(0);
     setHasCompleted(false);
+    setDemoFired({});
   };
 
-  // Floating trigger button
   if (!isOpen) {
     return (
       <motion.button
@@ -123,7 +144,6 @@ export function GuidedDemo() {
 
   return (
     <AnimatePresence>
-      {/* Backdrop */}
       <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
@@ -132,7 +152,6 @@ export function GuidedDemo() {
         onClick={handleClose}
       />
 
-      {/* Demo Panel */}
       <motion.div
         initial={{ x: 400, opacity: 0 }}
         animate={{ x: 0, opacity: 1 }}
@@ -146,14 +165,12 @@ export function GuidedDemo() {
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
               <Sparkles className="h-4 w-4 text-primary" />
-              <span className="text-xs font-semibold uppercase tracking-wider text-primary">Guided Demo</span>
+              <span className="text-xs font-semibold uppercase tracking-wider text-primary">Agentic Demo</span>
             </div>
             <button onClick={handleClose} className="rounded-md p-1 text-muted-foreground hover:text-foreground transition-colors">
               <X className="h-4 w-4" />
             </button>
           </div>
-
-          {/* Progress */}
           <div className="flex items-center gap-3">
             <div className="flex-1 h-1.5 rounded-full bg-secondary">
               <motion.div
@@ -187,7 +204,7 @@ export function GuidedDemo() {
                 </motion.div>
                 <h2 className="text-xl font-bold text-foreground mb-2">Demo Complete!</h2>
                 <p className="text-sm text-muted-foreground">
-                  You've explored all VoyageOps AI agent workspaces.
+                  You've explored all VoyageOps AI agentic capabilities.
                 </p>
               </motion.div>
             ) : (
@@ -210,7 +227,7 @@ export function GuidedDemo() {
                 </div>
 
                 {/* Key Features */}
-                <div className="rounded-lg border border-border bg-muted/50 p-4 mb-5">
+                <div className="rounded-lg border border-border bg-muted/50 p-4 mb-4">
                   <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-3">
                     Key Capabilities
                   </p>
@@ -229,6 +246,34 @@ export function GuidedDemo() {
                     ))}
                   </div>
                 </div>
+
+                {/* Agentic Demo Trigger */}
+                {step.demoQuery && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.5 }}
+                    className="rounded-lg border border-primary/30 bg-primary/5 p-4 mb-4"
+                  >
+                    <div className="flex items-center gap-2 mb-2">
+                      <Zap className="h-3.5 w-3.5 text-primary" />
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-primary">
+                        Live Agent Demo
+                      </p>
+                    </div>
+                    <p className="text-xs text-muted-foreground mb-3">
+                      Watch the AI agent analyze real-time data and generate actionable recommendations.
+                    </p>
+                    <button
+                      onClick={fireDemoQuery}
+                      disabled={!!demoFired[currentStep]}
+                      className="flex items-center gap-2 w-full justify-center rounded-md bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <MessageSquare className="h-4 w-4" />
+                      {demoFired[currentStep] ? "Query Sent — See Chat Below ↓" : `Ask: "${step.demoQuery}"`}
+                    </button>
+                  </motion.div>
+                )}
 
                 {/* Step indicator dots */}
                 <div className="flex justify-center gap-2 mb-5">

@@ -105,6 +105,19 @@ export function AgentChat({ agentType = "general", className }: AgentChatProps) 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // Listen for guided demo trigger events
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.agentType === agentType && detail?.query) {
+        // Small delay to let page render
+        setTimeout(() => handleSend(detail.query), 300);
+      }
+    };
+    window.addEventListener("guided-demo-query", handler);
+    return () => window.removeEventListener("guided-demo-query", handler);
+  }, [agentType]);
+
   const scrollToBottom = useCallback(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
