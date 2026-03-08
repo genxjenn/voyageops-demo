@@ -6,13 +6,18 @@ import {
   Ship, Settings2, Sparkles, CheckCircle2, MessageSquare, Zap
 } from "lucide-react";
 
+interface DemoQuery {
+  label: string;
+  query: string;
+}
+
 interface DemoStep {
   title: string;
   description: string;
   route: string;
   icon: React.ElementType;
   details: string[];
-  demoQuery?: string;
+  demoQueries?: DemoQuery[];
   agentType?: string;
 }
 
@@ -35,7 +40,10 @@ const demoSteps: DemoStep[] = [
     route: "/guest-recovery",
     icon: UserCheck,
     agentType: "guest-recovery",
-    demoQuery: "Analyze Margaret Chen's incident",
+    demoQueries: [
+      { label: "Analyze Margaret Chen's incident", query: "Analyze Margaret Chen's incident" },
+      { label: "Show Rossi suite AC failure", query: "Rossi suite AC critical" },
+    ],
     details: [
       "Monitors all guest interactions for service failures in real time",
       "Automatically calculates compensation using sentiment analysis and guest value",
@@ -49,7 +57,10 @@ const demoSteps: DemoStep[] = [
     route: "/port-disruption",
     icon: Ship,
     agentType: "port-disruption",
-    demoQuery: "Santorini weather disruption status",
+    demoQueries: [
+      { label: "Santorini weather disruption", query: "Santorini weather disruption status" },
+      { label: "Show alternative excursions", query: "alternative excursions available" },
+    ],
     details: [
       "Integrates weather, port authority, and vendor data for disruption prediction",
       "Auto-generates alternative excursion options when cancellations occur",
@@ -63,7 +74,10 @@ const demoSteps: DemoStep[] = [
     route: "/onboard-ops",
     icon: Settings2,
     agentType: "onboard-ops",
-    demoQuery: "Dining capacity status",
+    demoQueries: [
+      { label: "Dining capacity status", query: "Dining capacity status" },
+      { label: "Staff redeployment needed?", query: "staff redeployment recommendations" },
+    ],
     details: [
       "Live venue utilization monitoring with occupancy and wait-time tracking",
       "Intelligent staff redeployment recommendations based on demand patterns",
@@ -77,7 +91,7 @@ export function GuidedDemo() {
   const [isOpen, setIsOpen] = useState(false);
   const [currentStep, setCurrentStep] = useState(0);
   const [hasCompleted, setHasCompleted] = useState(false);
-  const [demoFired, setDemoFired] = useState<Record<number, boolean>>({});
+  const [demoFired, setDemoFired] = useState<Record<string, boolean>>({});
   const navigate = useNavigate();
 
   const step = demoSteps[currentStep];
@@ -89,14 +103,16 @@ export function GuidedDemo() {
     }
   }, [currentStep, isOpen]);
 
-  const fireDemoQuery = () => {
-    if (!step.demoQuery || demoFired[currentStep]) return;
-    setDemoFired(prev => ({ ...prev, [currentStep]: true }));
-    // Dispatch custom event for AgentChat to pick up
+  const fireDemoQuery = (queryIndex: number) => {
+    const queries = step.demoQueries;
+    if (!queries || !queries[queryIndex]) return;
+    const key = `${currentStep}-${queryIndex}`;
+    if (demoFired[key]) return;
+    setDemoFired(prev => ({ ...prev, [key]: true }));
     setTimeout(() => {
       window.dispatchEvent(
         new CustomEvent("guided-demo-query", {
-          detail: { query: step.demoQuery, agentType: step.agentType },
+          detail: { query: queries[queryIndex].query, agentType: step.agentType },
         })
       );
     }, 600);
@@ -248,7 +264,7 @@ export function GuidedDemo() {
                 </div>
 
                 {/* Agentic Demo Trigger */}
-                {step.demoQuery && (
+                {step.demoQueries && step.demoQueries.length > 0 && (
                   <motion.div
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
@@ -264,14 +280,22 @@ export function GuidedDemo() {
                     <p className="text-xs text-muted-foreground mb-3">
                       Watch the AI agent analyze real-time data and generate actionable recommendations.
                     </p>
-                    <button
-                      onClick={fireDemoQuery}
-                      disabled={!!demoFired[currentStep]}
-                      className="flex items-center gap-2 w-full justify-center rounded-md bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      <MessageSquare className="h-4 w-4" />
-                      {demoFired[currentStep] ? "Query Sent — See Chat Below ↓" : `Ask: "${step.demoQuery}"`}
-                    </button>
+                    <div className="space-y-2">
+                      {step.demoQueries.map((dq, qi) => {
+                        const key = `${currentStep}-${qi}`;
+                        return (
+                          <button
+                            key={qi}
+                            onClick={() => fireDemoQuery(qi)}
+                            disabled={!!demoFired[key]}
+                            className="flex items-center gap-2 w-full justify-center rounded-md bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            <MessageSquare className="h-4 w-4" />
+                            {demoFired[key] ? "Query Sent — See Chat Below ↓" : `Ask: "${dq.label}"`}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </motion.div>
                 )}
 
