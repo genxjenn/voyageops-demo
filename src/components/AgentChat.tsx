@@ -33,7 +33,7 @@ const MOCK_RESPONSES: Record<string, { patterns: RegExp[]; response: string }[]>
   ],
   "guest-recovery": [
     {
-      patterns: [/margaret|chen|platinum.*guest|dining/i],
+      patterns: [/jane|doe|platinum.*guest|dining/i],
       response: `### 🎯 Guest Recovery — Margaret Chen (Platinum)\n\n**Incident:** INC-3021 — Dining service failure at Le Bordeaux\n\n**Guest Profile:**\n- Loyalty: **Platinum** (12 voyages)\n- Onboard Spend: **$4,820** (top 5% this voyage)\n- Lifetime Value: **$58,000+**\n- First complaint in 12 sailings\n\n**Root Cause Analysis:**\nLe Bordeaux was operating at **96% capacity** with **25% understaffing**. Average wait time: 35 min (normal: 8 min).\n\n**Recommended Recovery (94% confidence):**\n1. ✅ Issue **$200** onboard credit\n2. ✅ Personal apology from Hotel Director (within 2 hrs)\n3. ✅ Complimentary **Chef's Table** dinner ($450 value)\n4. ✅ Priority reservation guarantee for remaining voyage\n\n⚠️ Risk: Platinum guest churn after unresolved failures is **34%**. Recommend immediate action.`,
     },
     {

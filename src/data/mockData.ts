@@ -396,7 +396,7 @@ export const agentRecommendations: AgentRecommendation[] = [
 
 // ─── TIMELINE EVENTS ───
 export const guestRecoveryTimeline: TimelineEvent[] = [
-  { id: "T-001", timestamp: "2024-03-15T18:32:00Z", type: "alert", title: "Incident Reported", description: "Dining service complaint logged for Margaret Chen at Le Bordeaux. Priority flag: Platinum guest.", actor: "System" },
+  { id: "T-001", timestamp: "2024-03-15T18:32:00Z", type: "alert", title: "Incident Reported", description: "Dining service complaint logged for Jane Doe at Le Bordeaux. Priority flag: Platinum guest.", actor: "System" },
   { id: "T-002", timestamp: "2024-03-15T18:35:00Z", type: "analysis", title: "Agent Analysis Initiated", description: "Guest Recovery Agent began cross-referencing guest profile, loyalty data, spend history, and venue conditions.", actor: "AI Agent" },
   { id: "T-003", timestamp: "2024-03-15T18:38:00Z", type: "info", title: "Venue Context Retrieved", description: "Le Bordeaux: 96% capacity, 4 staff below optimal. Average wait time: 35 min (normal: 8 min).", actor: "AI Agent" },
   { id: "T-004", timestamp: "2024-03-15T19:15:00Z", type: "recommendation", title: "Recovery Plan Generated", description: "4-action recovery plan created. Confidence: 94%. Estimated retention impact: $58,000+ lifetime value.", actor: "AI Agent" },

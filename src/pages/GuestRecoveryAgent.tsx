@@ -117,8 +117,8 @@ const GuestRecoveryAgent = () => {
           <div className="rounded-lg border border-primary/30 bg-primary/5 p-4">
             <h3 className="text-xs font-semibold uppercase tracking-wider text-primary mb-2">Demo Scenario</h3>
             <div className="text-xs text-muted-foreground space-y-2 leading-relaxed">
-              <p><strong className="text-foreground">Trigger:</strong> Platinum guest Margaret Chen filed a dining complaint after a 45-minute wait at Le Bordeaux, despite having a priority reservation.</p>
-              <p><strong className="text-foreground">Analysis:</strong> The agent correlated her loyalty tier (Platinum, 12 voyages), onboard spend ($4,820 — top 5%), and the fact this is her first complaint ever, with venue data showing Le Bordeaux at 96% capacity with 25% understaffing.</p>
+              <p><strong className="text-foreground">Trigger:</strong> Platinum guest Jane Doe filed a dining complaint after a 45-minute wait at Le Bordeaux, despite having a priority reservation.</p>
+               <p><strong className="text-foreground">Analysis:</strong> The agent correlated her loyalty tier (Platinum, 12 voyages), onboard spend ($4,820 — top 5%), and the fact this is her first complaint ever, with venue data showing Le Bordeaux at 96% capacity with 25% understaffing.</p>
               <p><strong className="text-foreground">Recommendation:</strong> 4-action recovery plan including $200 credit, personal Hotel Director apology, complimentary Chef's Table dinner, and priority reservation guarantee.</p>
               <p><strong className="text-foreground">Outcome:</strong> Estimated $58,000+ lifetime value protected. Churn risk reduced from 34% to under 5%.</p>
             </div>
