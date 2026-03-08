@@ -6,13 +6,18 @@ import {
   Ship, Settings2, Sparkles, CheckCircle2, MessageSquare, Zap
 } from "lucide-react";
 
+interface DemoQuery {
+  label: string;
+  query: string;
+}
+
 interface DemoStep {
   title: string;
   description: string;
   route: string;
   icon: React.ElementType;
   details: string[];
-  demoQuery?: string;
+  demoQueries?: DemoQuery[];
   agentType?: string;
 }
 
