@@ -40,7 +40,10 @@ const demoSteps: DemoStep[] = [
     route: "/guest-recovery",
     icon: UserCheck,
     agentType: "guest-recovery",
-    demoQuery: "Analyze Margaret Chen's incident",
+    demoQueries: [
+      { label: "Analyze Margaret Chen's incident", query: "Analyze Margaret Chen's incident" },
+      { label: "Show Rossi suite AC failure", query: "Rossi suite AC critical" },
+    ],
     details: [
       "Monitors all guest interactions for service failures in real time",
       "Automatically calculates compensation using sentiment analysis and guest value",
@@ -54,7 +57,10 @@ const demoSteps: DemoStep[] = [
     route: "/port-disruption",
     icon: Ship,
     agentType: "port-disruption",
-    demoQuery: "Santorini weather disruption status",
+    demoQueries: [
+      { label: "Santorini weather disruption", query: "Santorini weather disruption status" },
+      { label: "Show alternative excursions", query: "alternative excursions available" },
+    ],
     details: [
       "Integrates weather, port authority, and vendor data for disruption prediction",
       "Auto-generates alternative excursion options when cancellations occur",
@@ -68,7 +74,10 @@ const demoSteps: DemoStep[] = [
     route: "/onboard-ops",
     icon: Settings2,
     agentType: "onboard-ops",
-    demoQuery: "Dining capacity status",
+    demoQueries: [
+      { label: "Dining capacity status", query: "Dining capacity status" },
+      { label: "Staff redeployment needed?", query: "staff redeployment recommendations" },
+    ],
     details: [
       "Live venue utilization monitoring with occupancy and wait-time tracking",
       "Intelligent staff redeployment recommendations based on demand patterns",
