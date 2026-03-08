@@ -5,6 +5,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { GuidedDemo } from "@/components/GuidedDemo";
+import { StickyHeader } from "@/components/StickyHeader";
 
 const navItems = [
   { label: "Dashboard", to: "/", icon: LayoutDashboard },
