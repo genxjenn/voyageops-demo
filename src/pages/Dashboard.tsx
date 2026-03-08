@@ -1,6 +1,7 @@
 import { KPICard } from "@/components/KPICard";
 import { StatusBadge } from "@/components/StatusBadge";
 import { RecommendationCard } from "@/components/RecommendationCard";
+import { SatisfactionTrendsChart, RevenueProtectedChart, AgentConfidenceChart } from "@/components/DashboardCharts";
 import { dashboardKPIs, shipInfo, incidents, agentRecommendations, excursions, venues } from "@/data/mockData";
 import { Ship, MapPin, Users, Anchor, Cloud, Waves, AlertTriangle, ArrowRight } from "lucide-react";
 import { Link } from "react-router-dom";
@@ -64,6 +65,13 @@ const Dashboard = () => {
             <ArrowRight className="h-4 w-4 text-muted-foreground group-hover:text-primary transition-colors" />
           </Link>
         ))}
+      </div>
+
+      {/* Charts */}
+      <div className="grid gap-4 lg:grid-cols-3">
+        <SatisfactionTrendsChart />
+        <RevenueProtectedChart />
+        <AgentConfidenceChart />
       </div>
 
       {/* Active Alerts & Pending Recommendations */}
