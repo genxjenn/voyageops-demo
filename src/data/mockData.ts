@@ -111,8 +111,8 @@ export interface OperationalKPI {
 export const guests: Guest[] = [
   {
     id: "G-10421",
-    name: "Margaret Chen",
-    email: "m.chen@email.com",
+    name: "Jane Doe",
+    email: "j.doe@email.com",
     loyaltyTier: "Platinum",
     loyaltyNumber: "PLT-882901",
     cabinNumber: "A-214",
@@ -144,8 +144,8 @@ export const guests: Guest[] = [
   },
   {
     id: "G-10424",
-    name: "Sophia & Marco Rossi",
-    email: "s.rossi@email.com",
+    name: "Sophia & Marco Stark",
+    email: "s.stark@email.com",
     loyaltyTier: "Platinum",
     loyaltyNumber: "PLT-112087",
     cabinNumber: "A-102",
@@ -173,7 +173,7 @@ export const incidents: Incident[] = [
     guestId: "G-10421",
     type: "Service Failure",
     category: "Dining",
-    description: "Platinum guest Margaret Chen experienced 45-min wait at Le Bordeaux despite having priority reservation. Meal quality below standard. Guest expressed frustration to maître d'.",
+    description: "Platinum guest Jane Doe experienced 45-min wait at Le Bordeaux despite having priority reservation. Meal quality below standard. Guest expressed frustration to maître d'.",
     severity: "high",
     status: "reviewing",
     createdAt: "2024-03-15T18:32:00Z",
@@ -283,7 +283,7 @@ export const agentRecommendations: AgentRecommendation[] = [
   {
     id: "REC-001",
     agentType: "guest-recovery",
-    title: "Priority Recovery: Margaret Chen (Platinum)",
+    title: "Priority Recovery: Jane Doe (Platinum)",
     summary: "High-value Platinum guest experienced dining service failure at Le Bordeaux. Combined with her 12-voyage loyalty history and $4,820 onboard spend, immediate recovery is recommended.",
     reasoning: "Agent analyzed: booking profile (BK-78432), loyalty tier (Platinum, 12 voyages), onboard spend ($4,820 — top 5% this voyage), incident history (first complaint in 12 sailings), dining reservation data, and real-time venue load. Le Bordeaux was operating at 96% capacity with 25% understaffing. The guest's lifetime value is estimated at $58,000+. Risk of churn for Platinum guests after unresolved service failures is 34%.",
     dataSourcesUsed: ["Guest Profile", "Loyalty Database", "Booking System", "POS/Spend Data", "Incident Log", "Venue Capacity Monitor"],
@@ -303,9 +303,9 @@ export const agentRecommendations: AgentRecommendation[] = [
   {
     id: "REC-002",
     agentType: "guest-recovery",
-    title: "Suite Recovery: Rossi Family (Platinum)",
+    title: "Suite Recovery: Stark Family (Platinum)",
     summary: "Platinum suite guests experienced critical AC failure. Temporary relocation required. Recommend aggressive recovery given suite-level booking value.",
-    reasoning: "Agent analyzed: cabin maintenance logs, guest profile (18 voyages, $6,340 current spend), booking value ($12,400 suite), weather data (exterior temp 88°F), and maintenance ETA (part arrival: 18 hours). The Rossis represent top 1% guest value. Suite-level service failures have 42% rebooking risk.",
+    reasoning: "Agent analyzed: cabin maintenance logs, guest profile (18 voyages, $6,340 current spend), booking value ($12,400 suite), weather data (exterior temp 88°F), and maintenance ETA (part arrival: 18 hours). The Starks represent top 1% guest value. Suite-level service failures have 42% rebooking risk.",
     dataSourcesUsed: ["Maintenance System", "Guest Profile", "Cabin Sensors", "Weather API", "Parts Inventory"],
     confidence: 97,
     impact: "high",
@@ -396,7 +396,7 @@ export const agentRecommendations: AgentRecommendation[] = [
 
 // ─── TIMELINE EVENTS ───
 export const guestRecoveryTimeline: TimelineEvent[] = [
-  { id: "T-001", timestamp: "2024-03-15T18:32:00Z", type: "alert", title: "Incident Reported", description: "Dining service complaint logged for Margaret Chen at Le Bordeaux. Priority flag: Platinum guest.", actor: "System" },
+  { id: "T-001", timestamp: "2024-03-15T18:32:00Z", type: "alert", title: "Incident Reported", description: "Dining service complaint logged for Jane Doe at Le Bordeaux. Priority flag: Platinum guest.", actor: "System" },
   { id: "T-002", timestamp: "2024-03-15T18:35:00Z", type: "analysis", title: "Agent Analysis Initiated", description: "Guest Recovery Agent began cross-referencing guest profile, loyalty data, spend history, and venue conditions.", actor: "AI Agent" },
   { id: "T-003", timestamp: "2024-03-15T18:38:00Z", type: "info", title: "Venue Context Retrieved", description: "Le Bordeaux: 96% capacity, 4 staff below optimal. Average wait time: 35 min (normal: 8 min).", actor: "AI Agent" },
   { id: "T-004", timestamp: "2024-03-15T19:15:00Z", type: "recommendation", title: "Recovery Plan Generated", description: "4-action recovery plan created. Confidence: 94%. Estimated retention impact: $58,000+ lifetime value.", actor: "AI Agent" },
