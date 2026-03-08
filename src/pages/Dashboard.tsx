@@ -67,6 +67,13 @@ const Dashboard = () => {
         ))}
       </div>
 
+      {/* Charts */}
+      <div className="grid gap-4 lg:grid-cols-3">
+        <SatisfactionTrendsChart />
+        <RevenueProtectedChart />
+        <AgentConfidenceChart />
+      </div>
+
       {/* Active Alerts & Pending Recommendations */}
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Active Incidents */}
