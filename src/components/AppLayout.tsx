@@ -84,9 +84,12 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
       </aside>
 
       {/* Main */}
-      <main className="flex-1 overflow-y-auto scrollbar-thin">
-        {children}
-      </main>
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <StickyHeader />
+        <main className="flex-1 overflow-y-auto scrollbar-thin">
+          {children}
+        </main>
+      </div>
 
       <GuidedDemo />
     </div>
