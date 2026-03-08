@@ -7,7 +7,7 @@ import { User, Crown, CreditCard, Ship, MessageSquare, Star } from "lucide-react
 
 const GuestRecoveryAgent = () => {
   const recs = agentRecommendations.filter(r => r.agentType === "guest-recovery");
-  const guest = guests[0]; // Margaret Chen - primary scenario
+  const guest = guests[0]; // Jane Doe - primary scenario
   const incident = incidents[0];
 
   return (
