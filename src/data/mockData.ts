@@ -283,7 +283,7 @@ export const agentRecommendations: AgentRecommendation[] = [
   {
     id: "REC-001",
     agentType: "guest-recovery",
-    title: "Priority Recovery: Margaret Chen (Platinum)",
+    title: "Priority Recovery: Jane Doe (Platinum)",
     summary: "High-value Platinum guest experienced dining service failure at Le Bordeaux. Combined with her 12-voyage loyalty history and $4,820 onboard spend, immediate recovery is recommended.",
     reasoning: "Agent analyzed: booking profile (BK-78432), loyalty tier (Platinum, 12 voyages), onboard spend ($4,820 — top 5% this voyage), incident history (first complaint in 12 sailings), dining reservation data, and real-time venue load. Le Bordeaux was operating at 96% capacity with 25% understaffing. The guest's lifetime value is estimated at $58,000+. Risk of churn for Platinum guests after unresolved service failures is 34%.",
     dataSourcesUsed: ["Guest Profile", "Loyalty Database", "Booking System", "POS/Spend Data", "Incident Log", "Venue Capacity Monitor"],
