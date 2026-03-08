@@ -4,6 +4,7 @@ import {
   LayoutDashboard, UserCheck, Ship, Settings2, Brain, ChevronLeft, ChevronRight, Anchor, FileText
 } from "lucide-react";
 import { useState } from "react";
+import { GuidedDemo } from "@/components/GuidedDemo";
 
 const navItems = [
   { label: "Dashboard", to: "/", icon: LayoutDashboard },
@@ -85,6 +86,8 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
       <main className="flex-1 overflow-y-auto scrollbar-thin">
         {children}
       </main>
+
+      <GuidedDemo />
     </div>
   );
 }
