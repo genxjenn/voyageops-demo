@@ -234,28 +234,41 @@ export function AgentChat({ agentType = "general", className }: AgentChatProps) 
         )}
 
         {messages.map((msg) => (
-          <div key={msg.id} className={cn("flex gap-3", msg.role === "user" ? "justify-end" : "justify-start")}>
+          <div key={msg.id} className={cn("flex gap-3 group", msg.role === "user" ? "justify-end" : "justify-start")}>
             {msg.role === "assistant" && (
               <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-primary/10 mt-0.5">
                 <Bot className="h-3.5 w-3.5 text-primary" />
               </div>
             )}
-            <div className={cn(
-              "max-w-[85%] rounded-xl px-4 py-3 text-sm",
-              msg.role === "user"
-                ? "bg-primary text-primary-foreground rounded-br-sm"
-                : "bg-muted/50 text-foreground rounded-bl-sm"
-            )}>
-              {msg.role === "assistant" ? (
-                <div className="prose prose-sm max-w-none prose-headings:text-foreground prose-p:text-foreground prose-strong:text-foreground prose-td:text-foreground prose-th:text-foreground prose-li:text-foreground [&_table]:text-xs [&_table]:w-full [&_th]:px-2 [&_th]:py-1 [&_td]:px-2 [&_td]:py-1 [&_th]:text-left [&_th]:border-b [&_th]:border-border [&_td]:border-b [&_td]:border-border/50">
-                  <ReactMarkdown>{msg.content}</ReactMarkdown>
-                  {msg.isStreaming && (
-                    <span className="inline-block w-1.5 h-4 bg-primary/60 animate-pulse ml-0.5 align-middle" />
-                  )}
-                </div>
-              ) : (
-                <p>{msg.content}</p>
-              )}
+            <div className="flex flex-col gap-1 max-w-[85%]">
+              <div className={cn(
+                "rounded-xl px-4 py-3 text-sm relative",
+                msg.role === "user"
+                  ? "bg-primary text-primary-foreground rounded-br-sm"
+                  : "bg-muted/50 text-foreground rounded-bl-sm"
+              )}>
+                {msg.role === "assistant" ? (
+                  <div className="prose prose-sm max-w-none prose-headings:text-foreground prose-p:text-foreground prose-strong:text-foreground prose-td:text-foreground prose-th:text-foreground prose-li:text-foreground [&_table]:text-xs [&_table]:w-full [&_th]:px-2 [&_th]:py-1 [&_td]:px-2 [&_td]:py-1 [&_th]:text-left [&_th]:border-b [&_th]:border-border [&_td]:border-b [&_td]:border-border/50">
+                    <ReactMarkdown>{msg.content}</ReactMarkdown>
+                    {msg.isStreaming && (
+                      <span className="inline-block w-1.5 h-4 bg-primary/60 animate-pulse ml-0.5 align-middle" />
+                    )}
+                  </div>
+                ) : (
+                  <p>{msg.content}</p>
+                )}
+              </div>
+              <div className={cn(
+                "flex items-center gap-2",
+                msg.role === "user" ? "justify-end" : "justify-start"
+              )}>
+                <span className="text-[10px] text-muted-foreground">
+                  {format(msg.timestamp, "h:mm a")}
+                </span>
+                {msg.role === "assistant" && !msg.isStreaming && msg.content && (
+                  <CopyButton content={msg.content} />
+                )}
+              </div>
             </div>
             {msg.role === "user" && (
               <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-secondary mt-0.5">
@@ -270,8 +283,10 @@ export function AgentChat({ agentType = "general", className }: AgentChatProps) 
             <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-primary/10 mt-0.5">
               <Bot className="h-3.5 w-3.5 text-primary" />
             </div>
-            <div className="bg-muted/50 rounded-xl rounded-bl-sm px-4 py-3">
-              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            <div className="bg-muted/50 rounded-xl rounded-bl-sm px-4 py-3 flex items-center gap-1.5">
+              <span className="h-2 w-2 rounded-full bg-primary/60 animate-bounce [animation-delay:0ms]" />
+              <span className="h-2 w-2 rounded-full bg-primary/60 animate-bounce [animation-delay:150ms]" />
+              <span className="h-2 w-2 rounded-full bg-primary/60 animate-bounce [animation-delay:300ms]" />
             </div>
           </div>
         )}
