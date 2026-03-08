@@ -103,14 +103,16 @@ export function GuidedDemo() {
     }
   }, [currentStep, isOpen]);
 
-  const fireDemoQuery = () => {
-    if (!step.demoQuery || demoFired[currentStep]) return;
-    setDemoFired(prev => ({ ...prev, [currentStep]: true }));
-    // Dispatch custom event for AgentChat to pick up
+  const fireDemoQuery = (queryIndex: number) => {
+    const queries = step.demoQueries;
+    if (!queries || !queries[queryIndex]) return;
+    const key = `${currentStep}-${queryIndex}`;
+    if (demoFired[key]) return;
+    setDemoFired(prev => ({ ...prev, [key]: true }));
     setTimeout(() => {
       window.dispatchEvent(
         new CustomEvent("guided-demo-query", {
-          detail: { query: step.demoQuery, agentType: step.agentType },
+          detail: { query: queries[queryIndex].query, agentType: step.agentType },
         })
       );
     }, 600);
