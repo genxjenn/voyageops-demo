@@ -125,6 +125,9 @@ const GuestRecoveryAgent = () => {
           </div>
         </div>
       </div>
+
+      {/* NLP Chat Interface */}
+      <AgentChat agentType="guest-recovery" className="h-[520px]" />
     </div>
   );
 };

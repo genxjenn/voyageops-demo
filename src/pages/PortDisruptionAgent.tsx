@@ -141,6 +141,9 @@ const PortDisruptionAgent = () => {
           </div>
         </div>
       </div>
+
+      {/* NLP Chat Interface */}
+      <AgentChat agentType="port-disruption" className="h-[520px]" />
     </div>
   );
 };
