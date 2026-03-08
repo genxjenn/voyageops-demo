@@ -1,5 +1,6 @@
 import { RecommendationCard } from "@/components/RecommendationCard";
 import { AgentTimeline } from "@/components/AgentTimeline";
+import { AgentChat } from "@/components/AgentChat";
 import { StatusBadge } from "@/components/StatusBadge";
 import { venues, agentRecommendations, onboardOpsTimeline } from "@/data/mockData";
 import { Users, Clock, Wrench, TrendingUp } from "lucide-react";
