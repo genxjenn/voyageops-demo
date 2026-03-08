@@ -173,7 +173,7 @@ export const incidents: Incident[] = [
     guestId: "G-10421",
     type: "Service Failure",
     category: "Dining",
-    description: "Platinum guest Margaret Chen experienced 45-min wait at Le Bordeaux despite having priority reservation. Meal quality below standard. Guest expressed frustration to maître d'.",
+    description: "Platinum guest Jane Doe experienced 45-min wait at Le Bordeaux despite having priority reservation. Meal quality below standard. Guest expressed frustration to maître d'.",
     severity: "high",
     status: "reviewing",
     createdAt: "2024-03-15T18:32:00Z",
