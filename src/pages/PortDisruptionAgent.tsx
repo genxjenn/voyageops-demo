@@ -5,7 +5,25 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { excursions, agentRecommendations, portDisruptionTimeline, shipInfo, guests } from "@/data/mockData";
 import { CloudRain, MapPin, Users, DollarSign, AlertTriangle, Calendar } from "lucide-react";
 
+// ┌─────────────────────────────────────────────────────────────────────────────┐
+// │ COUCHBASE INTEGRATION: Port Disruption Agent Data                          │
+// │                                                                             │
+// │ OPTION A — Couchbase Capella:                                              │
+// │   • Excursions: SQL++ on voyageops.excursions.catalog WHERE status="disrupted" │
+// │   • Weather data: Enriched via Capella Eventing (NOAA API → Couchbase doc) │
+// │   • Guest impact: JOIN across guests and excursion_bookings collections    │
+// │   • Recommendations: Capella AI Services RAG pipeline                      │
+// │                                                                             │
+// │ OPTION B — Couchbase Server:                                               │
+// │   • Same SQL++ queries (fully portable)                                    │
+// │   • Eventing Service for weather feed ingestion and alert triggers         │
+// │   • Analytics Service for revenue impact calculations                      │
+// │     Docs: https://docs.couchbase.com/server/current/analytics/introduction.html │
+// └─────────────────────────────────────────────────────────────────────────────┘
 const PortDisruptionAgent = () => {
+  // TODO: Replace with useQuery() hooks fetching from Couchbase-backed API
+  // OPTION A (Capella): SQL++ → voyageops.excursions.catalog + Capella AI Services
+  // OPTION B (Server):  N1QL → same queries + Server FTS for NLP matching
   const recs = agentRecommendations.filter(r => r.agentType === "port-disruption");
 
   return (

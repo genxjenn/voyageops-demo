@@ -20,6 +20,47 @@ interface AgentChatProps {
   className?: string;
 }
 
+// ┌─────────────────────────────────────────────────────────────────────────────┐
+// │ COUCHBASE INTEGRATION: NLP Chat — Mock Response Engine                     │
+// │                                                                             │
+// │ Replace MOCK_RESPONSES with live Couchbase-powered query pipeline:         │
+// │                                                                             │
+// │ OPTION A — Couchbase Capella + Capella AI Services:                        │
+// │   1. User query → Capella AI Services (RAG pipeline)                       │
+// │      Docs: https://docs.couchbase.com/ai/get-started/intro.html           │
+// │   2. AI Services performs vector search on embeddings stored in Capella    │
+// │      Docs: https://docs.couchbase.com/cloud/vector-search/vector-search.html │
+// │   3. Retrieved context (guest profiles, incidents, venues) assembled       │
+// │   4. LLM generates natural language response with cited data               │
+// │   5. Response streamed back to the UI                                      │
+// │                                                                             │
+// │   Example flow:                                                             │
+// │   const searchResult = await scope.search("voyageops-vectors", {           │
+// │     vector: await embed(userQuery),                                         │
+// │     fields: ["*"], limit: 5                                                │
+// │   });                                                                       │
+// │   const context = searchResult.rows.map(r => r.fields);                    │
+// │   const answer = await llm.chat({ context, query: userQuery });            │
+// │                                                                             │
+// │ OPTION B — Couchbase Server + Full-Text Search (FTS):                      │
+// │   1. User query → Couchbase FTS Service for keyword/semantic search        │
+// │      Docs: https://docs.couchbase.com/server/current/fts/fts-introduction.html │
+// │   2. FTS supports vector search indexes for embedding-based retrieval      │
+// │   3. SQL++ (N1QL) queries for structured data retrieval                    │
+// │   4. External LLM API call with assembled context                          │
+// │   5. Store conversation history in voyageops.operations.chat_history       │
+// │                                                                             │
+// │   Example FTS query:                                                        │
+// │   const ftsResult = await cluster.searchQuery("voyageops-fts",             │
+// │     SearchQuery.match(userQuery), { limit: 10, fields: ["*"] }             │
+// │   );                                                                        │
+// │                                                                             │
+// │ Both Options: Implement an Edge Function / API endpoint that:              │
+// │   - Accepts user query + agent context                                      │
+// │   - Queries relevant Couchbase collections                                 │
+// │   - Calls LLM with retrieved context                                       │
+// │   - Returns structured response for UI rendering                           │
+// └─────────────────────────────────────────────────────────────────────────────┘
 const MOCK_RESPONSES: Record<string, { patterns: RegExp[]; response: string }[]> = {
   "general": [
     {
@@ -80,6 +121,25 @@ const MOCK_RESPONSES: Record<string, { patterns: RegExp[]; response: string }[]>
 
 const FALLBACK_RESPONSE = "I'm analyzing the available data but couldn't find a specific match for your query. Try asking about:\n\n- **Guest incidents** and recovery plans\n- **Port disruptions** and excursion status\n- **Venue capacity** and staffing\n- **Ship status** and recommendations\n\nFor example: *\"What's the status of the Santorini excursion?\"* or *\"Show me active incidents\"*";
 
+// ┌─────────────────────────────────────────────────────────────────────────────┐
+// │ COUCHBASE INTEGRATION: Query Routing Function                              │
+// │                                                                             │
+// │ Replace getMockResponse() with a call to your backend API that:            │
+// │                                                                             │
+// │ OPTION A — Couchbase Capella:                                              │
+// │   async function getAgentResponse(query: string, agentType: string) {      │
+// │     const res = await fetch("/api/agent-query", {                           │
+// │       method: "POST",                                                       │
+// │       body: JSON.stringify({ query, agentType }),                           │
+// │     });                                                                     │
+// │     return res.json(); // { response: string, sources: string[] }          │
+// │   }                                                                         │
+// │   Backend uses Capella AI Services for RAG + Capella SQL++ for data        │
+// │                                                                             │
+// │ OPTION B — Couchbase Server:                                               │
+// │   Same API shape; backend uses Server FTS + N1QL + external LLM           │
+// │   Backend can run as Couchbase Eventing Function or external service       │
+// └─────────────────────────────────────────────────────────────────────────────┘
 function getMockResponse(input: string, agentType: string): string {
   const agentResponses = MOCK_RESPONSES[agentType] || [];
   const generalResponses = MOCK_RESPONSES["general"] || [];

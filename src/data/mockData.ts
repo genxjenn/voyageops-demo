@@ -1,4 +1,48 @@
-// VoyageOps AI - Mock Data Layer
+// ═══════════════════════════════════════════════════════════════════════════════
+// VoyageOps AI — Mock Data Layer
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// This file contains static mock data used for demonstration purposes.
+// In production, each data collection below maps to a Couchbase document collection
+// and should be replaced with live database calls.
+//
+// ┌─────────────────────────────────────────────────────────────────────────────┐
+// │ COUCHBASE INTEGRATION POINTS                                               │
+// │                                                                             │
+// │ Two deployment options are supported:                                       │
+// │                                                                             │
+// │ OPTION A — Couchbase Capella (DBaaS / Cloud-Managed)                       │
+// │   Docs: https://docs.couchbase.com/cloud/get-started/intro.html            │
+// │   • Fully managed cloud database — no infrastructure to maintain            │
+// │   • Use Capella SDKs (Node.js, Python, Java) for CRUD operations           │
+// │   • Capella AI Services for NLP query processing and vector search          │
+// │     Docs: https://docs.couchbase.com/ai/get-started/intro.html             │
+// │   • Capella App Services for mobile sync (if extending to mobile)           │
+// │                                                                             │
+// │ OPTION B — Couchbase Server (Self-Managed / On-Premises)                   │
+// │   Docs: https://docs.couchbase.com/server/current/introduction/intro.html  │
+// │   • Self-managed deployment (on-prem, private cloud, Kubernetes via         │
+// │     Couchbase Autonomous Operator)                                          │
+// │   • Same SDK APIs as Capella — code is portable between options             │
+// │   • Full-Text Search (FTS) service for NLP keyword matching                 │
+// │     Docs: https://docs.couchbase.com/server/current/fts/fts-introduction.html │
+// │   • Eventing service for real-time triggers on document changes             │
+// │     Docs: https://docs.couchbase.com/server/current/eventing/eventing-overview.html │
+// │   • Analytics service for complex cross-collection queries                  │
+// │     Docs: https://docs.couchbase.com/server/current/analytics/introduction.html │
+// │                                                                             │
+// │ BUCKET STRUCTURE (applies to both options):                                 │
+// │   Bucket: "voyageops"                                                       │
+// │   Scopes: "operations", "guests", "excursions"                             │
+// │   Collections: guests, bookings, incidents, excursions, venues,            │
+// │                recommendations, timeline_events, ship_info, kpis           │
+// │                                                                             │
+// │ SDK REFERENCE:                                                              │
+// │   Node.js SDK: https://docs.couchbase.com/nodejs-sdk/current/hello-world/overview.html │
+// │   Python SDK:  https://docs.couchbase.com/python-sdk/current/hello-world/overview.html │
+// │   Java SDK:    https://docs.couchbase.com/java-sdk/current/hello-world/overview.html   │
+// └─────────────────────────────────────────────────────────────────────────────┘
+//
 // Designed to map to Couchbase document model
 
 export interface Guest {
@@ -108,6 +152,32 @@ export interface OperationalKPI {
 }
 
 // ─── MOCK GUESTS ───
+// ┌─────────────────────────────────────────────────────────────────────────────┐
+// │ COUCHBASE INTEGRATION: Guest Profiles                                      │
+// │                                                                             │
+// │ Collection: voyageops.guests.profiles                                       │
+// │                                                                             │
+// │ OPTION A — Couchbase Capella:                                              │
+// │   const cluster = await connect("couchbases://cb.<endpoint>.cloud.couchbase.com", { │
+// │     username: CB_USERNAME, password: CB_PASSWORD                            │
+// │   });                                                                       │
+// │   const guests = cluster.bucket("voyageops").scope("guests").collection("profiles"); │
+// │   const result = await guests.get("G-10421");                              │
+// │   // For querying by loyalty tier, use Capella SQL++:                       │
+// │   // SELECT * FROM voyageops.guests.profiles WHERE loyaltyTier = "Platinum" │
+// │                                                                             │
+// │ OPTION B — Couchbase Server:                                               │
+// │   const cluster = await connect("couchbase://localhost", {                  │
+// │     username: CB_USERNAME, password: CB_PASSWORD                            │
+// │   });                                                                       │
+// │   const guests = cluster.bucket("voyageops").scope("guests").collection("profiles"); │
+// │   const result = await guests.get("G-10421");                              │
+// │   // Same SQL++ (N1QL) queries work on both Capella and Server              │
+// │   // Index recommendation: CREATE INDEX idx_loyalty ON profiles(loyaltyTier) │
+// │                                                                             │
+// │ Both options use the same Node.js SDK: @couchbase/couchbase                │
+// │ Docs: https://docs.couchbase.com/nodejs-sdk/current/howtos/kv-operations.html │
+// └─────────────────────────────────────────────────────────────────────────────┘
 export const guests: Guest[] = [
   {
     id: "G-10421",
@@ -167,6 +237,33 @@ export const guests: Guest[] = [
 ];
 
 // ─── MOCK INCIDENTS ───
+// ┌─────────────────────────────────────────────────────────────────────────────┐
+// │ COUCHBASE INTEGRATION: Incident Tracking                                   │
+// │                                                                             │
+// │ Collection: voyageops.operations.incidents                                  │
+// │                                                                             │
+// │ OPTION A — Couchbase Capella:                                              │
+// │   Use SQL++ queries via Capella Query Service:                             │
+// │   SELECT * FROM voyageops.operations.incidents                             │
+// │     WHERE status != "closed" ORDER BY createdAt DESC                       │
+// │   Leverage Capella Eventing to trigger AI agent analysis when new           │
+// │   incidents are created (document mutation → agent pipeline)                │
+// │                                                                             │
+// │ OPTION B — Couchbase Server:                                               │
+// │   Use N1QL (SQL++) via Query Service:                                      │
+// │   Same SQL++ syntax as Capella — fully portable                            │
+// │   Use Eventing Service for real-time triggers:                             │
+// │   Docs: https://docs.couchbase.com/server/current/eventing/eventing-overview.html │
+// │   Index recommendation:                                                     │
+// │     CREATE INDEX idx_incidents_status ON incidents(status, severity, createdAt DESC) │
+// │                                                                             │
+// │ Both: Use Sub-Document API for partial updates (e.g., status changes):     │
+// │   await incidents.mutateIn("INC-3021", [                                   │
+// │     MutateInSpec.replace("status", "reviewing"),                            │
+// │     MutateInSpec.replace("updatedAt", new Date().toISOString())             │
+// │   ]);                                                                       │
+// │ Docs: https://docs.couchbase.com/nodejs-sdk/current/howtos/subdocument-operations.html │
+// └─────────────────────────────────────────────────────────────────────────────┘
 export const incidents: Incident[] = [
   {
     id: "INC-3021",
@@ -215,6 +312,24 @@ export const incidents: Incident[] = [
 ];
 
 // ─── MOCK EXCURSIONS ───
+// ┌─────────────────────────────────────────────────────────────────────────────┐
+// │ COUCHBASE INTEGRATION: Excursion Management                                │
+// │                                                                             │
+// │ Collection: voyageops.excursions.catalog                                    │
+// │                                                                             │
+// │ OPTION A — Couchbase Capella:                                              │
+// │   Query disrupted excursions:                                               │
+// │   SELECT * FROM voyageops.excursions.catalog                               │
+// │     WHERE status IN ["disrupted", "cancelled"]                              │
+// │   Use Capella App Services for real-time sync to crew mobile devices       │
+// │   Docs: https://docs.couchbase.com/cloud/app-services/index.html           │
+// │                                                                             │
+// │ OPTION B — Couchbase Server:                                               │
+// │   Same SQL++ queries via Query Service                                     │
+// │   Use Sync Gateway for mobile crew app synchronization                     │
+// │   Docs: https://docs.couchbase.com/sync-gateway/current/introduction.html  │
+// │   Index: CREATE INDEX idx_exc_status ON catalog(status, date, port)         │
+// └─────────────────────────────────────────────────────────────────────────────┘
 export const excursions: Excursion[] = [
   {
     id: "EXC-501",
@@ -267,6 +382,33 @@ export const excursions: Excursion[] = [
 ];
 
 // ─── MOCK VENUES ───
+// ┌─────────────────────────────────────────────────────────────────────────────┐
+// │ COUCHBASE INTEGRATION: Venue / IoT Sensor Data                             │
+// │                                                                             │
+// │ Collection: voyageops.operations.venues                                     │
+// │                                                                             │
+// │ OPTION A — Couchbase Capella:                                              │
+// │   Real-time venue data ingested via Capella Data API or SDK upserts        │
+// │   IoT sensors (occupancy, temperature, staffing) write to this collection  │
+// │   Use SQL++ for cross-venue analytics:                                     │
+// │   SELECT name, currentOccupancy, capacity,                                 │
+// │     ROUND(currentOccupancy*100.0/capacity, 1) AS utilization               │
+// │   FROM voyageops.operations.venues                                         │
+// │   WHERE status IN ["overloaded", "busy"] ORDER BY utilization DESC         │
+// │                                                                             │
+// │ OPTION B — Couchbase Server:                                               │
+// │   Same SQL++ queries; additionally leverage:                                │
+// │   • Eventing Service: auto-trigger alerts when occupancy > 90%             │
+// │   • Analytics Service: historical venue utilization trends                  │
+// │     Docs: https://docs.couchbase.com/server/current/analytics/introduction.html │
+// │   Index: CREATE INDEX idx_venue_status ON venues(status, currentOccupancy DESC) │
+// │                                                                             │
+// │ Both: Use Sub-Document API for high-frequency sensor updates:              │
+// │   await venues.mutateIn("V-01", [                                          │
+// │     MutateInSpec.replace("currentOccupancy", 118),                          │
+// │     MutateInSpec.replace("waitTime", 40)                                    │
+// │   ]);                                                                       │
+// └─────────────────────────────────────────────────────────────────────────────┘
 export const venues: Venue[] = [
   { id: "V-01", name: "Le Bordeaux", type: "Fine Dining", deck: 6, capacity: 120, currentOccupancy: 115, waitTime: 35, staffCount: 12, optimalStaff: 16, status: "overloaded" },
   { id: "V-02", name: "Ocean Grill", type: "Casual Dining", deck: 8, capacity: 200, currentOccupancy: 142, waitTime: 12, staffCount: 18, optimalStaff: 18, status: "normal" },
@@ -279,6 +421,33 @@ export const venues: Venue[] = [
 ];
 
 // ─── AGENT RECOMMENDATIONS ───
+// ┌─────────────────────────────────────────────────────────────────────────────┐
+// │ COUCHBASE INTEGRATION: AI Agent Recommendations                            │
+// │                                                                             │
+// │ Collection: voyageops.operations.recommendations                            │
+// │                                                                             │
+// │ OPTION A — Couchbase Capella:                                              │
+// │   Recommendations generated by Capella AI Services (RAG pipeline):         │
+// │   Docs: https://docs.couchbase.com/ai/get-started/intro.html              │
+// │   • Agent queries guest profiles, incidents, venues via SQL++              │
+// │   • Context assembled and sent to LLM via Capella AI Services              │
+// │   • Generated recommendations stored back in this collection               │
+// │   • Vector Search used for semantic similarity matching:                    │
+// │     Docs: https://docs.couchbase.com/cloud/vector-search/vector-search.html │
+// │                                                                             │
+// │ OPTION B — Couchbase Server:                                               │
+// │   Use Full-Text Search (FTS) Service for semantic matching:                │
+// │   Docs: https://docs.couchbase.com/server/current/fts/fts-introduction.html │
+// │   • FTS supports vector search indexes for embedding-based retrieval       │
+// │   • Eventing Service triggers agent pipeline on new incidents              │
+// │   • Analytics Service for cross-referencing historical outcomes             │
+// │   Index: CREATE INDEX idx_rec_agent ON recommendations(agentType, status)   │
+// │                                                                             │
+// │ Approval workflow: Sub-Document mutations to update status field            │
+// │   await recs.mutateIn("REC-001", [                                         │
+// │     MutateInSpec.replace("status", "approved")                              │
+// │   ]);                                                                       │
+// └─────────────────────────────────────────────────────────────────────────────┘
 export const agentRecommendations: AgentRecommendation[] = [
   {
     id: "REC-001",
@@ -395,6 +564,24 @@ export const agentRecommendations: AgentRecommendation[] = [
 ];
 
 // ─── TIMELINE EVENTS ───
+// ┌─────────────────────────────────────────────────────────────────────────────┐
+// │ COUCHBASE INTEGRATION: Activity Timeline / Audit Log                       │
+// │                                                                             │
+// │ Collection: voyageops.operations.timeline_events                            │
+// │                                                                             │
+// │ OPTION A — Couchbase Capella:                                              │
+// │   Timeline events are append-only documents, ideal for Capella's           │
+// │   auto-scaling storage. Query with:                                         │
+// │   SELECT * FROM voyageops.operations.timeline_events                       │
+// │     WHERE META().id LIKE "guest-recovery:%" ORDER BY timestamp DESC        │
+// │   Use Capella Eventing to auto-generate timeline entries on state changes  │
+// │                                                                             │
+// │ OPTION B — Couchbase Server:                                               │
+// │   Same SQL++ queries; use Eventing Service for auto-generation             │
+// │   Consider TTL (Time-To-Live) for older timeline entries:                  │
+// │   Docs: https://docs.couchbase.com/server/current/learn/buckets-memory-and-storage/expiration.html │
+// │   Index: CREATE INDEX idx_timeline ON timeline_events(type, timestamp DESC) │
+// └─────────────────────────────────────────────────────────────────────────────┘
 export const guestRecoveryTimeline: TimelineEvent[] = [
   { id: "T-001", timestamp: "2024-03-15T18:32:00Z", type: "alert", title: "Incident Reported", description: "Dining service complaint logged for Jane Doe at Le Bordeaux. Priority flag: Platinum guest.", actor: "System" },
   { id: "T-002", timestamp: "2024-03-15T18:35:00Z", type: "analysis", title: "Agent Analysis Initiated", description: "Guest Recovery Agent began cross-referencing guest profile, loyalty data, spend history, and venue conditions.", actor: "AI Agent" },
@@ -418,6 +605,23 @@ export const onboardOpsTimeline: TimelineEvent[] = [
 ];
 
 // ─── KPIs ───
+// ┌─────────────────────────────────────────────────────────────────────────────┐
+// │ COUCHBASE INTEGRATION: Dashboard KPIs (Aggregated Metrics)                 │
+// │                                                                             │
+// │ OPTION A — Couchbase Capella:                                              │
+// │   Compute KPIs via SQL++ aggregate queries across collections:             │
+// │   SELECT COUNT(*) AS recoveryOpps FROM voyageops.operations.incidents      │
+// │     WHERE status != "closed" AND DATE_DIFF_STR(NOW_STR(), createdAt, "day") < 1 │
+// │   Use Capella Analytics (RT-OLAP) for heavy aggregations without           │
+// │   impacting operational workload:                                           │
+// │   Docs: https://docs.couchbase.com/cloud/analytics/index.html              │
+// │                                                                             │
+// │ OPTION B — Couchbase Server:                                               │
+// │   Use Analytics Service for OLAP-style KPI computation:                    │
+// │   Docs: https://docs.couchbase.com/server/current/analytics/introduction.html │
+// │   Or use SQL++ with covering indexes for real-time aggregation             │
+// │   Consider materialized views or Eventing-based KPI pre-computation        │
+// └─────────────────────────────────────────────────────────────────────────────┘
 export const dashboardKPIs: OperationalKPI[] = [
   { label: "Guest Recovery Opportunities", value: 7, change: 2, changeLabel: "from yesterday", trend: "up" },
   { label: "Disruptions Mitigated", value: 12, change: -3, changeLabel: "vs. last voyage", trend: "down" },
@@ -427,6 +631,16 @@ export const dashboardKPIs: OperationalKPI[] = [
   { label: "Satisfaction Recovery Rate", value: "89%", change: 5, changeLabel: "pts improvement", trend: "up" },
 ];
 
+// ┌─────────────────────────────────────────────────────────────────────────────┐
+// │ COUCHBASE INTEGRATION: Ship Information                                    │
+// │                                                                             │
+// │ Collection: voyageops.operations.ship_info (single document or config)     │
+// │                                                                             │
+// │ Both Options: Simple KV get by ship ID                                     │
+// │   const shipDoc = await shipInfo.get("MS-ACME-VOYAGER");                   │
+// │   Real-time position updates via Sub-Document API                          │
+// │   Weather data can be enriched via Couchbase Eventing (external API call)  │
+// └─────────────────────────────────────────────────────────────────────────────┘
 export const shipInfo = {
   name: "MS Acme Voyager",
   currentVoyage: "Mediterranean Odyssey V-2024-03",
