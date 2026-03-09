@@ -18,9 +18,28 @@ const navItems = [
   { label: "Architecture", to: "/architecture", icon: FileText },
 ];
 
+const breadcrumbMap: Record<string, { label: string; parent?: string }> = {
+  "/": { label: "Dashboard" },
+  "/guest-recovery": { label: "Guest Recovery", parent: "/" },
+  "/port-disruption": { label: "Port & Excursions", parent: "/" },
+  "/onboard-ops": { label: "Onboard Ops", parent: "/" },
+  "/architecture": { label: "Architecture", parent: "/" },
+};
+
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
   const location = useLocation();
+
+  const crumbs: { label: string; to?: string }[] = [];
+  let current = breadcrumbMap[location.pathname];
+  if (current) {
+    crumbs.unshift({ label: current.label });
+    let parentPath = current.parent;
+    while (parentPath && breadcrumbMap[parentPath]) {
+      crumbs.unshift({ label: breadcrumbMap[parentPath].label, to: parentPath });
+      parentPath = breadcrumbMap[parentPath].parent;
+    }
+  }
 
   return (
     <div className="flex h-screen overflow-hidden">
