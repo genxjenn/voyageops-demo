@@ -121,6 +121,25 @@ const MOCK_RESPONSES: Record<string, { patterns: RegExp[]; response: string }[]>
 
 const FALLBACK_RESPONSE = "I'm analyzing the available data but couldn't find a specific match for your query. Try asking about:\n\n- **Guest incidents** and recovery plans\n- **Port disruptions** and excursion status\n- **Venue capacity** and staffing\n- **Ship status** and recommendations\n\nFor example: *\"What's the status of the Santorini excursion?\"* or *\"Show me active incidents\"*";
 
+// ┌─────────────────────────────────────────────────────────────────────────────┐
+// │ COUCHBASE INTEGRATION: Query Routing Function                              │
+// │                                                                             │
+// │ Replace getMockResponse() with a call to your backend API that:            │
+// │                                                                             │
+// │ OPTION A — Couchbase Capella:                                              │
+// │   async function getAgentResponse(query: string, agentType: string) {      │
+// │     const res = await fetch("/api/agent-query", {                           │
+// │       method: "POST",                                                       │
+// │       body: JSON.stringify({ query, agentType }),                           │
+// │     });                                                                     │
+// │     return res.json(); // { response: string, sources: string[] }          │
+// │   }                                                                         │
+// │   Backend uses Capella AI Services for RAG + Capella SQL++ for data        │
+// │                                                                             │
+// │ OPTION B — Couchbase Server:                                               │
+// │   Same API shape; backend uses Server FTS + N1QL + external LLM           │
+// │   Backend can run as Couchbase Eventing Function or external service       │
+// └─────────────────────────────────────────────────────────────────────────────┘
 function getMockResponse(input: string, agentType: string): string {
   const agentResponses = MOCK_RESPONSES[agentType] || [];
   const generalResponses = MOCK_RESPONSES["general"] || [];
