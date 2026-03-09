@@ -564,6 +564,24 @@ export const agentRecommendations: AgentRecommendation[] = [
 ];
 
 // ─── TIMELINE EVENTS ───
+// ┌─────────────────────────────────────────────────────────────────────────────┐
+// │ COUCHBASE INTEGRATION: Activity Timeline / Audit Log                       │
+// │                                                                             │
+// │ Collection: voyageops.operations.timeline_events                            │
+// │                                                                             │
+// │ OPTION A — Couchbase Capella:                                              │
+// │   Timeline events are append-only documents, ideal for Capella's           │
+// │   auto-scaling storage. Query with:                                         │
+// │   SELECT * FROM voyageops.operations.timeline_events                       │
+// │     WHERE META().id LIKE "guest-recovery:%" ORDER BY timestamp DESC        │
+// │   Use Capella Eventing to auto-generate timeline entries on state changes  │
+// │                                                                             │
+// │ OPTION B — Couchbase Server:                                               │
+// │   Same SQL++ queries; use Eventing Service for auto-generation             │
+// │   Consider TTL (Time-To-Live) for older timeline entries:                  │
+// │   Docs: https://docs.couchbase.com/server/current/learn/buckets-memory-and-storage/expiration.html │
+// │   Index: CREATE INDEX idx_timeline ON timeline_events(type, timestamp DESC) │
+// └─────────────────────────────────────────────────────────────────────────────┘
 export const guestRecoveryTimeline: TimelineEvent[] = [
   { id: "T-001", timestamp: "2024-03-15T18:32:00Z", type: "alert", title: "Incident Reported", description: "Dining service complaint logged for Jane Doe at Le Bordeaux. Priority flag: Platinum guest.", actor: "System" },
   { id: "T-002", timestamp: "2024-03-15T18:35:00Z", type: "analysis", title: "Agent Analysis Initiated", description: "Guest Recovery Agent began cross-referencing guest profile, loyalty data, spend history, and venue conditions.", actor: "AI Agent" },
