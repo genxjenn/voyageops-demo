@@ -631,6 +631,16 @@ export const dashboardKPIs: OperationalKPI[] = [
   { label: "Satisfaction Recovery Rate", value: "89%", change: 5, changeLabel: "pts improvement", trend: "up" },
 ];
 
+// ┌─────────────────────────────────────────────────────────────────────────────┐
+// │ COUCHBASE INTEGRATION: Ship Information                                    │
+// │                                                                             │
+// │ Collection: voyageops.operations.ship_info (single document or config)     │
+// │                                                                             │
+// │ Both Options: Simple KV get by ship ID                                     │
+// │   const shipDoc = await shipInfo.get("MS-ACME-VOYAGER");                   │
+// │   Real-time position updates via Sub-Document API                          │
+// │   Weather data can be enriched via Couchbase Eventing (external API call)  │
+// └─────────────────────────────────────────────────────────────────────────────┘
 export const shipInfo = {
   name: "MS Acme Voyager",
   currentVoyage: "Mediterranean Odyssey V-2024-03",
