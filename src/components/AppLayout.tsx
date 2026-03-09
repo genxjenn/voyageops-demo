@@ -1,11 +1,14 @@
 import { NavLink, useLocation } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import {
-  LayoutDashboard, UserCheck, Ship, Settings2, Brain, ChevronLeft, ChevronRight, Anchor, FileText
+  LayoutDashboard, UserCheck, Ship, Settings2, Brain, ChevronLeft, ChevronRight, Anchor, FileText, Home
 } from "lucide-react";
 import { useState } from "react";
 import { GuidedDemo } from "@/components/GuidedDemo";
 import { StickyHeader } from "@/components/StickyHeader";
+import {
+  Breadcrumb, BreadcrumbList, BreadcrumbItem, BreadcrumbLink, BreadcrumbPage, BreadcrumbSeparator
+} from "@/components/ui/breadcrumb";
 
 const navItems = [
   { label: "Dashboard", to: "/", icon: LayoutDashboard },
