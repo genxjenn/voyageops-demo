@@ -237,6 +237,33 @@ export const guests: Guest[] = [
 ];
 
 // ─── MOCK INCIDENTS ───
+// ┌─────────────────────────────────────────────────────────────────────────────┐
+// │ COUCHBASE INTEGRATION: Incident Tracking                                   │
+// │                                                                             │
+// │ Collection: voyageops.operations.incidents                                  │
+// │                                                                             │
+// │ OPTION A — Couchbase Capella:                                              │
+// │   Use SQL++ queries via Capella Query Service:                             │
+// │   SELECT * FROM voyageops.operations.incidents                             │
+// │     WHERE status != "closed" ORDER BY createdAt DESC                       │
+// │   Leverage Capella Eventing to trigger AI agent analysis when new           │
+// │   incidents are created (document mutation → agent pipeline)                │
+// │                                                                             │
+// │ OPTION B — Couchbase Server:                                               │
+// │   Use N1QL (SQL++) via Query Service:                                      │
+// │   Same SQL++ syntax as Capella — fully portable                            │
+// │   Use Eventing Service for real-time triggers:                             │
+// │   Docs: https://docs.couchbase.com/server/current/eventing/eventing-overview.html │
+// │   Index recommendation:                                                     │
+// │     CREATE INDEX idx_incidents_status ON incidents(status, severity, createdAt DESC) │
+// │                                                                             │
+// │ Both: Use Sub-Document API for partial updates (e.g., status changes):     │
+// │   await incidents.mutateIn("INC-3021", [                                   │
+// │     MutateInSpec.replace("status", "reviewing"),                            │
+// │     MutateInSpec.replace("updatedAt", new Date().toISOString())             │
+// │   ]);                                                                       │
+// │ Docs: https://docs.couchbase.com/nodejs-sdk/current/howtos/subdocument-operations.html │
+// └─────────────────────────────────────────────────────────────────────────────┘
 export const incidents: Incident[] = [
   {
     id: "INC-3021",
