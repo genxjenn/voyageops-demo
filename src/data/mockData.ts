@@ -1,4 +1,48 @@
-// VoyageOps AI - Mock Data Layer
+// ═══════════════════════════════════════════════════════════════════════════════
+// VoyageOps AI — Mock Data Layer
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// This file contains static mock data used for demonstration purposes.
+// In production, each data collection below maps to a Couchbase document collection
+// and should be replaced with live database calls.
+//
+// ┌─────────────────────────────────────────────────────────────────────────────┐
+// │ COUCHBASE INTEGRATION POINTS                                               │
+// │                                                                             │
+// │ Two deployment options are supported:                                       │
+// │                                                                             │
+// │ OPTION A — Couchbase Capella (DBaaS / Cloud-Managed)                       │
+// │   Docs: https://docs.couchbase.com/cloud/get-started/intro.html            │
+// │   • Fully managed cloud database — no infrastructure to maintain            │
+// │   • Use Capella SDKs (Node.js, Python, Java) for CRUD operations           │
+// │   • Capella AI Services for NLP query processing and vector search          │
+// │     Docs: https://docs.couchbase.com/ai/get-started/intro.html             │
+// │   • Capella App Services for mobile sync (if extending to mobile)           │
+// │                                                                             │
+// │ OPTION B — Couchbase Server (Self-Managed / On-Premises)                   │
+// │   Docs: https://docs.couchbase.com/server/current/introduction/intro.html  │
+// │   • Self-managed deployment (on-prem, private cloud, Kubernetes via         │
+// │     Couchbase Autonomous Operator)                                          │
+// │   • Same SDK APIs as Capella — code is portable between options             │
+// │   • Full-Text Search (FTS) service for NLP keyword matching                 │
+// │     Docs: https://docs.couchbase.com/server/current/fts/fts-introduction.html │
+// │   • Eventing service for real-time triggers on document changes             │
+// │     Docs: https://docs.couchbase.com/server/current/eventing/eventing-overview.html │
+// │   • Analytics service for complex cross-collection queries                  │
+// │     Docs: https://docs.couchbase.com/server/current/analytics/introduction.html │
+// │                                                                             │
+// │ BUCKET STRUCTURE (applies to both options):                                 │
+// │   Bucket: "voyageops"                                                       │
+// │   Scopes: "operations", "guests", "excursions"                             │
+// │   Collections: guests, bookings, incidents, excursions, venues,            │
+// │                recommendations, timeline_events, ship_info, kpis           │
+// │                                                                             │
+// │ SDK REFERENCE:                                                              │
+// │   Node.js SDK: https://docs.couchbase.com/nodejs-sdk/current/hello-world/overview.html │
+// │   Python SDK:  https://docs.couchbase.com/python-sdk/current/hello-world/overview.html │
+// │   Java SDK:    https://docs.couchbase.com/java-sdk/current/hello-world/overview.html   │
+// └─────────────────────────────────────────────────────────────────────────────┘
+//
 // Designed to map to Couchbase document model
 
 export interface Guest {
