@@ -312,6 +312,24 @@ export const incidents: Incident[] = [
 ];
 
 // ─── MOCK EXCURSIONS ───
+// ┌─────────────────────────────────────────────────────────────────────────────┐
+// │ COUCHBASE INTEGRATION: Excursion Management                                │
+// │                                                                             │
+// │ Collection: voyageops.excursions.catalog                                    │
+// │                                                                             │
+// │ OPTION A — Couchbase Capella:                                              │
+// │   Query disrupted excursions:                                               │
+// │   SELECT * FROM voyageops.excursions.catalog                               │
+// │     WHERE status IN ["disrupted", "cancelled"]                              │
+// │   Use Capella App Services for real-time sync to crew mobile devices       │
+// │   Docs: https://docs.couchbase.com/cloud/app-services/index.html           │
+// │                                                                             │
+// │ OPTION B — Couchbase Server:                                               │
+// │   Same SQL++ queries via Query Service                                     │
+// │   Use Sync Gateway for mobile crew app synchronization                     │
+// │   Docs: https://docs.couchbase.com/sync-gateway/current/introduction.html  │
+// │   Index: CREATE INDEX idx_exc_status ON catalog(status, date, port)         │
+// └─────────────────────────────────────────────────────────────────────────────┘
 export const excursions: Excursion[] = [
   {
     id: "EXC-501",
