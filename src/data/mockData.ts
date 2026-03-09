@@ -605,6 +605,23 @@ export const onboardOpsTimeline: TimelineEvent[] = [
 ];
 
 // ─── KPIs ───
+// ┌─────────────────────────────────────────────────────────────────────────────┐
+// │ COUCHBASE INTEGRATION: Dashboard KPIs (Aggregated Metrics)                 │
+// │                                                                             │
+// │ OPTION A — Couchbase Capella:                                              │
+// │   Compute KPIs via SQL++ aggregate queries across collections:             │
+// │   SELECT COUNT(*) AS recoveryOpps FROM voyageops.operations.incidents      │
+// │     WHERE status != "closed" AND DATE_DIFF_STR(NOW_STR(), createdAt, "day") < 1 │
+// │   Use Capella Analytics (RT-OLAP) for heavy aggregations without           │
+// │   impacting operational workload:                                           │
+// │   Docs: https://docs.couchbase.com/cloud/analytics/index.html              │
+// │                                                                             │
+// │ OPTION B — Couchbase Server:                                               │
+// │   Use Analytics Service for OLAP-style KPI computation:                    │
+// │   Docs: https://docs.couchbase.com/server/current/analytics/introduction.html │
+// │   Or use SQL++ with covering indexes for real-time aggregation             │
+// │   Consider materialized views or Eventing-based KPI pre-computation        │
+// └─────────────────────────────────────────────────────────────────────────────┘
 export const dashboardKPIs: OperationalKPI[] = [
   { label: "Guest Recovery Opportunities", value: 7, change: 2, changeLabel: "from yesterday", trend: "up" },
   { label: "Disruptions Mitigated", value: 12, change: -3, changeLabel: "vs. last voyage", trend: "down" },
