@@ -152,6 +152,32 @@ export interface OperationalKPI {
 }
 
 // ─── MOCK GUESTS ───
+// ┌─────────────────────────────────────────────────────────────────────────────┐
+// │ COUCHBASE INTEGRATION: Guest Profiles                                      │
+// │                                                                             │
+// │ Collection: voyageops.guests.profiles                                       │
+// │                                                                             │
+// │ OPTION A — Couchbase Capella:                                              │
+// │   const cluster = await connect("couchbases://cb.<endpoint>.cloud.couchbase.com", { │
+// │     username: CB_USERNAME, password: CB_PASSWORD                            │
+// │   });                                                                       │
+// │   const guests = cluster.bucket("voyageops").scope("guests").collection("profiles"); │
+// │   const result = await guests.get("G-10421");                              │
+// │   // For querying by loyalty tier, use Capella SQL++:                       │
+// │   // SELECT * FROM voyageops.guests.profiles WHERE loyaltyTier = "Platinum" │
+// │                                                                             │
+// │ OPTION B — Couchbase Server:                                               │
+// │   const cluster = await connect("couchbase://localhost", {                  │
+// │     username: CB_USERNAME, password: CB_PASSWORD                            │
+// │   });                                                                       │
+// │   const guests = cluster.bucket("voyageops").scope("guests").collection("profiles"); │
+// │   const result = await guests.get("G-10421");                              │
+// │   // Same SQL++ (N1QL) queries work on both Capella and Server              │
+// │   // Index recommendation: CREATE INDEX idx_loyalty ON profiles(loyaltyTier) │
+// │                                                                             │
+// │ Both options use the same Node.js SDK: @couchbase/couchbase                │
+// │ Docs: https://docs.couchbase.com/nodejs-sdk/current/howtos/kv-operations.html │
+// └─────────────────────────────────────────────────────────────────────────────┘
 export const guests: Guest[] = [
   {
     id: "G-10421",
