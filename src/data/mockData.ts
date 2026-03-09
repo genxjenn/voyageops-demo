@@ -382,6 +382,33 @@ export const excursions: Excursion[] = [
 ];
 
 // ─── MOCK VENUES ───
+// ┌─────────────────────────────────────────────────────────────────────────────┐
+// │ COUCHBASE INTEGRATION: Venue / IoT Sensor Data                             │
+// │                                                                             │
+// │ Collection: voyageops.operations.venues                                     │
+// │                                                                             │
+// │ OPTION A — Couchbase Capella:                                              │
+// │   Real-time venue data ingested via Capella Data API or SDK upserts        │
+// │   IoT sensors (occupancy, temperature, staffing) write to this collection  │
+// │   Use SQL++ for cross-venue analytics:                                     │
+// │   SELECT name, currentOccupancy, capacity,                                 │
+// │     ROUND(currentOccupancy*100.0/capacity, 1) AS utilization               │
+// │   FROM voyageops.operations.venues                                         │
+// │   WHERE status IN ["overloaded", "busy"] ORDER BY utilization DESC         │
+// │                                                                             │
+// │ OPTION B — Couchbase Server:                                               │
+// │   Same SQL++ queries; additionally leverage:                                │
+// │   • Eventing Service: auto-trigger alerts when occupancy > 90%             │
+// │   • Analytics Service: historical venue utilization trends                  │
+// │     Docs: https://docs.couchbase.com/server/current/analytics/introduction.html │
+// │   Index: CREATE INDEX idx_venue_status ON venues(status, currentOccupancy DESC) │
+// │                                                                             │
+// │ Both: Use Sub-Document API for high-frequency sensor updates:              │
+// │   await venues.mutateIn("V-01", [                                          │
+// │     MutateInSpec.replace("currentOccupancy", 118),                          │
+// │     MutateInSpec.replace("waitTime", 40)                                    │
+// │   ]);                                                                       │
+// └─────────────────────────────────────────────────────────────────────────────┘
 export const venues: Venue[] = [
   { id: "V-01", name: "Le Bordeaux", type: "Fine Dining", deck: 6, capacity: 120, currentOccupancy: 115, waitTime: 35, staffCount: 12, optimalStaff: 16, status: "overloaded" },
   { id: "V-02", name: "Ocean Grill", type: "Casual Dining", deck: 8, capacity: 200, currentOccupancy: 142, waitTime: 12, staffCount: 18, optimalStaff: 18, status: "normal" },
