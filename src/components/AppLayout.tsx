@@ -108,6 +108,24 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
       {/* Main */}
       <div className="flex-1 flex flex-col overflow-hidden">
         <StickyHeader />
+        {crumbs.length > 1 && (
+          <div className="border-b border-border bg-muted/30 px-6 py-2">
+            <Breadcrumb>
+              <BreadcrumbList>
+                {crumbs.map((crumb, idx) => (
+                  <BreadcrumbItem key={idx}>
+                    {idx > 0 && <BreadcrumbSeparator />}
+                    {crumb.to ? (
+                      <BreadcrumbLink href={crumb.to} className="text-xs">{crumb.label}</BreadcrumbLink>
+                    ) : (
+                      <BreadcrumbPage className="text-xs">{crumb.label}</BreadcrumbPage>
+                    )}
+                  </BreadcrumbItem>
+                ))}
+              </BreadcrumbList>
+            </Breadcrumb>
+          </div>
+        )}
         <main className="flex-1 overflow-y-auto scrollbar-thin">
           {children}
         </main>
