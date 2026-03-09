@@ -5,7 +5,26 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { venues, agentRecommendations, onboardOpsTimeline } from "@/data/mockData";
 import { Users, Clock, Wrench, TrendingUp } from "lucide-react";
 
+// ┌─────────────────────────────────────────────────────────────────────────────┐
+// │ COUCHBASE INTEGRATION: Onboard Operations Agent Data                       │
+// │                                                                             │
+// │ OPTION A — Couchbase Capella:                                              │
+// │   • Venue data: SQL++ on voyageops.operations.venues (real-time IoT data)  │
+// │   • Staff scheduling: voyageops.operations.staff_schedules collection      │
+// │   • Recommendations: Capella AI Services analyzes venue sensor streams     │
+// │   • Use Capella Data API for high-frequency sensor upserts                 │
+// │                                                                             │
+// │ OPTION B — Couchbase Server:                                               │
+// │   • Same SQL++ venue queries (portable code)                               │
+// │   • Eventing Service: auto-trigger alerts when occupancy > threshold       │
+// │     Docs: https://docs.couchbase.com/server/current/eventing/eventing-overview.html │
+// │   • Sub-Document API for efficient partial venue updates from IoT sensors  │
+// │     Docs: https://docs.couchbase.com/server/current/learn/data/data.html   │
+// └─────────────────────────────────────────────────────────────────────────────┘
 const OnboardOpsAgent = () => {
+  // TODO: Replace with useQuery() hooks fetching from Couchbase-backed API
+  // OPTION A (Capella): SQL++ → voyageops.operations.venues + Capella AI Services
+  // OPTION B (Server):  N1QL → same queries + Eventing for real-time alerts
   const recs = agentRecommendations.filter(r => r.agentType === "onboard-ops");
 
   return (

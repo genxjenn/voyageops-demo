@@ -15,15 +15,43 @@ export function RecommendationCard({ recommendation, className }: Recommendation
   const [expanded, setExpanded] = useState(false);
   const [status, setStatus] = useState(recommendation.status);
 
+  // ┌─────────────────────────────────────────────────────────────────────────────┐
+  // │ COUCHBASE INTEGRATION: Action Approval / Rejection Workflow               │
+  // │                                                                             │
+  // │ Replace toast-only handlers with Couchbase write-back:                     │
+  // │                                                                             │
+  // │ OPTION A — Couchbase Capella:                                              │
+  // │   POST /api/actions/approve → Capella SDK Sub-Document mutation:           │
+  // │   await recommendations.mutateIn(recId, [                                  │
+  // │     MutateInSpec.replace("status", "approved"),                             │
+  // │     MutateInSpec.arrayAppend("auditLog", { action, user, timestamp })      │
+  // │   ]);                                                                       │
+  // │   Capella Eventing can then trigger downstream execution (e.g., issue      │
+  // │   credit via POS API, send notification via messaging service)             │
+  // │                                                                             │
+  // │ OPTION B — Couchbase Server:                                               │
+  // │   Same Sub-Document API (portable code):                                   │
+  // │   Docs: https://docs.couchbase.com/server/current/learn/data/data.html     │
+  // │   Eventing Service triggers downstream actions on status change:           │
+  // │   Docs: https://docs.couchbase.com/server/current/eventing/eventing-overview.html │
+  // │                                                                             │
+  // │ Both: Log all approvals/rejections to timeline_events collection           │
+  // └─────────────────────────────────────────────────────────────────────────────┘
   const handleApprove = (action: RecommendedAction) => {
+    // TODO: POST /api/recommendations/{recId}/actions/{action.id}/approve
+    // Backend: Couchbase Sub-Document mutation + Eventing trigger
     toast.success(`Action approved: ${action.label}`, { description: "Action has been queued for execution." });
   };
 
   const handleReject = (action: RecommendedAction) => {
+    // TODO: POST /api/recommendations/{recId}/actions/{action.id}/reject
+    // Backend: Couchbase Sub-Document mutation + audit log entry
     toast.info(`Action rejected: ${action.label}`, { description: "Action has been logged and skipped." });
   };
 
   const handleApproveAll = () => {
+    // TODO: POST /api/recommendations/{recId}/approve-all
+    // Backend: Batch Couchbase Sub-Document mutations for all actions
     setStatus("approved");
     toast.success("All actions approved", { description: `${recommendation.actions.length} actions queued for execution.` });
   };

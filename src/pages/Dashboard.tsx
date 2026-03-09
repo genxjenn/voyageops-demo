@@ -6,7 +6,33 @@ import { dashboardKPIs, shipInfo, incidents, agentRecommendations, excursions, v
 import { Ship, MapPin, Users, Anchor, Cloud, Waves, AlertTriangle, ArrowRight } from "lucide-react";
 import { Link } from "react-router-dom";
 
+// ┌─────────────────────────────────────────────────────────────────────────────┐
+// │ COUCHBASE INTEGRATION: Dashboard Data Loading                              │
+// │                                                                             │
+// │ Replace static imports with live queries:                                   │
+// │                                                                             │
+// │ OPTION A — Couchbase Capella (via API / Edge Function):                    │
+// │   const { data: kpis } = useQuery("kpis", () =>                            │
+// │     fetch("/api/kpis").then(r => r.json())                                  │
+// │   );                                                                        │
+// │   Backend: SQL++ aggregation queries across voyageops bucket                │
+// │   KPIs computed via Capella Analytics (RT-OLAP) for heavy aggregations     │
+// │   Docs: https://docs.couchbase.com/cloud/analytics/index.html              │
+// │                                                                             │
+// │ OPTION B — Couchbase Server (via API / Edge Function):                     │
+// │   Same React Query pattern; backend uses:                                   │
+// │   • N1QL (SQL++) for real-time counts and aggregations                     │
+// │   • Analytics Service for cross-collection KPI computation                 │
+// │   • Eventing Service for pre-computed KPI documents                        │
+// │   Docs: https://docs.couchbase.com/server/current/analytics/introduction.html │
+// │                                                                             │
+// │ Both: Consider caching KPIs in a dedicated collection with TTL             │
+// │ for sub-second dashboard loads                                              │
+// └─────────────────────────────────────────────────────────────────────────────┘
 const Dashboard = () => {
+  // TODO: Replace with useQuery() hooks fetching from Couchbase-backed API
+  // OPTION A (Capella): GET /api/dashboard → Capella SQL++ aggregations
+  // OPTION B (Server):  GET /api/dashboard → Server N1QL aggregations
   const pendingRecs = agentRecommendations.filter(r => r.status === "pending" || r.status === "reviewing");
   const activeIncidents = incidents.filter(i => i.status !== "closed");
   const disruptedExcursions = excursions.filter(e => e.status === "disrupted" || e.status === "cancelled");
