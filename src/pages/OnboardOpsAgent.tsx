@@ -2,8 +2,10 @@ import { RecommendationCard } from "@/components/RecommendationCard";
 import { AgentTimeline } from "@/components/AgentTimeline";
 import { AgentChat } from "@/components/AgentChat";
 import { StatusBadge } from "@/components/StatusBadge";
-import { venues, agentRecommendations, onboardOpsTimeline } from "@/data/mockData";
+import { venues as mockVenues, agentRecommendations as mockRecommendations, onboardOpsTimeline as mockTimeline } from "@/data/mockData";
 import { Users, Clock, Wrench, TrendingUp } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/lib/api";
 
 // ┌─────────────────────────────────────────────────────────────────────────────┐
 // │ COUCHBASE INTEGRATION: Onboard Operations Agent Data                       │
@@ -22,10 +24,19 @@ import { Users, Clock, Wrench, TrendingUp } from "lucide-react";
 // │     Docs: https://docs.couchbase.com/server/current/learn/data/data.html   │
 // └─────────────────────────────────────────────────────────────────────────────┘
 const OnboardOpsAgent = () => {
-  // TODO: Replace with useQuery() hooks fetching from Couchbase-backed API
-  // OPTION A (Capella): SQL++ → voyageops.operations.venues + Capella AI Services
-  // OPTION B (Server):  N1QL → same queries + Eventing for real-time alerts
-  const recs = agentRecommendations.filter(r => r.agentType === "onboard-ops");
+  const venuesQuery = useQuery({ queryKey: ["venues"], queryFn: api.venues });
+  const recsQuery = useQuery({
+    queryKey: ["recommendations", "onboard-ops"],
+    queryFn: () => api.recommendations("onboard-ops"),
+  });
+  const timelineQuery = useQuery({
+    queryKey: ["timeline", "onboard-ops"],
+    queryFn: () => api.timeline("onboard-ops"),
+  });
+
+  const venues = venuesQuery.data ?? mockVenues;
+  const recs = recsQuery.data ?? mockRecommendations.filter(r => r.agentType === "onboard-ops");
+  const timeline = timelineQuery.data ?? mockTimeline;
 
   return (
     <div className="p-6 space-y-6 max-w-[1400px] mx-auto">
@@ -116,7 +127,7 @@ const OnboardOpsAgent = () => {
         <div className="space-y-4">
           <h2 className="text-sm font-semibold text-foreground">Activity Timeline</h2>
           <div className="rounded-lg border border-border bg-card p-4">
-            <AgentTimeline events={onboardOpsTimeline} />
+            <AgentTimeline events={timeline} />
           </div>
 
           <div className="rounded-lg border border-primary/30 bg-primary/5 p-4">

@@ -2,8 +2,11 @@ import { RecommendationCard } from "@/components/RecommendationCard";
 import { AgentTimeline } from "@/components/AgentTimeline";
 import { AgentChat } from "@/components/AgentChat";
 import { StatusBadge } from "@/components/StatusBadge";
-import { guests, incidents, agentRecommendations, guestRecoveryTimeline } from "@/data/mockData";
+import { guests as mockGuests, incidents as mockIncidents, agentRecommendations as mockRecommendations, guestRecoveryTimeline as mockTimeline } from "@/data/mockData";
 import { User, Crown, CreditCard, Ship, MessageSquare, Star } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/lib/api";
+import { parseTimestamp } from "@/lib/utils";
 
 // ┌─────────────────────────────────────────────────────────────────────────────┐
 // │ COUCHBASE INTEGRATION: Guest Recovery Agent Data                           │
@@ -26,12 +29,24 @@ import { User, Crown, CreditCard, Ship, MessageSquare, Star } from "lucide-react
 // │     Docs: https://docs.couchbase.com/server/current/eventing/eventing-overview.html │
 // └─────────────────────────────────────────────────────────────────────────────┘
 const GuestRecoveryAgent = () => {
-  // TODO: Replace with useQuery() hooks fetching from Couchbase-backed API
-  // OPTION A (Capella): Capella SDK → voyageops.guests.profiles.get("G-10421")
-  // OPTION B (Server):  Server SDK → same API, different connection string
-  const recs = agentRecommendations.filter(r => r.agentType === "guest-recovery");
-  const guest = guests[0]; // Jane Doe - primary scenario
-  const incident = incidents[0];
+  const guestsQuery = useQuery({ queryKey: ["guests"], queryFn: api.guests });
+  const incidentsQuery = useQuery({ queryKey: ["incidents"], queryFn: api.incidents });
+  const recsQuery = useQuery({
+    queryKey: ["recommendations", "guest-recovery"],
+    queryFn: () => api.recommendations("guest-recovery"),
+  });
+  const timelineQuery = useQuery({
+    queryKey: ["timeline", "guest-recovery"],
+    queryFn: () => api.timeline("guest-recovery"),
+  });
+
+  const guests = guestsQuery.data ?? mockGuests;
+  const incidents = incidentsQuery.data ?? mockIncidents;
+  const recs = recsQuery.data ?? mockRecommendations.filter(r => r.agentType === "guest-recovery");
+  const timeline = timelineQuery.data ?? mockTimeline;
+
+  const guest = guests[0] ?? mockGuests[0];
+  const incident = incidents[0] ?? mockIncidents[0];
 
   return (
     <div className="p-6 space-y-6 max-w-[1400px] mx-auto">
@@ -82,7 +97,7 @@ const GuestRecoveryAgent = () => {
             </div>
             <div className="mt-3 rounded bg-muted p-2 text-xs">
               <span className="text-muted-foreground flex items-center gap-1"><Star className="h-3 w-3" />Guest Notes</span>
-              <p className="text-foreground mt-0.5">Prefers window tables. Celebrates anniversary on Day 6. Wine enthusiast (Bordeaux). First complaint in 12 sailings.</p>
+              <p className="text-foreground mt-0.5">{guest.notes ?? "No notes on file."}</p>
             </div>
           </div>
 
@@ -99,8 +114,8 @@ const GuestRecoveryAgent = () => {
             <p className="text-sm font-medium text-foreground">{incident.type}: {incident.category}</p>
             <p className="mt-1.5 text-xs text-muted-foreground leading-relaxed">{incident.description}</p>
             <div className="mt-3 flex gap-4 text-xs text-muted-foreground">
-              <span>Reported: {new Date(incident.createdAt).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}</span>
-              <span>Updated: {new Date(incident.updatedAt).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}</span>
+              <span>Reported: {parseTimestamp(incident.createdAt).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}</span>
+              <span>Updated: {parseTimestamp(incident.updatedAt).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}</span>
             </div>
           </div>
 
@@ -136,7 +151,7 @@ const GuestRecoveryAgent = () => {
         <div className="space-y-4">
           <h2 className="text-sm font-semibold text-foreground">Activity Timeline</h2>
           <div className="rounded-lg border border-border bg-card p-4">
-            <AgentTimeline events={guestRecoveryTimeline} />
+            <AgentTimeline events={timeline} />
           </div>
 
           {/* Demo Scenario */}

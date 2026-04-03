@@ -2,8 +2,10 @@ import { RecommendationCard } from "@/components/RecommendationCard";
 import { AgentTimeline } from "@/components/AgentTimeline";
 import { AgentChat } from "@/components/AgentChat";
 import { StatusBadge } from "@/components/StatusBadge";
-import { excursions, agentRecommendations, portDisruptionTimeline, shipInfo, guests } from "@/data/mockData";
+import { excursions as mockExcursions, agentRecommendations as mockRecommendations, portDisruptionTimeline as mockTimeline } from "@/data/mockData";
 import { CloudRain, MapPin, Users, DollarSign, AlertTriangle, Calendar } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/lib/api";
 
 // ┌─────────────────────────────────────────────────────────────────────────────┐
 // │ COUCHBASE INTEGRATION: Port Disruption Agent Data                          │
@@ -21,10 +23,19 @@ import { CloudRain, MapPin, Users, DollarSign, AlertTriangle, Calendar } from "l
 // │     Docs: https://docs.couchbase.com/server/current/analytics/introduction.html │
 // └─────────────────────────────────────────────────────────────────────────────┘
 const PortDisruptionAgent = () => {
-  // TODO: Replace with useQuery() hooks fetching from Couchbase-backed API
-  // OPTION A (Capella): SQL++ → voyageops.excursions.catalog + Capella AI Services
-  // OPTION B (Server):  N1QL → same queries + Server FTS for NLP matching
-  const recs = agentRecommendations.filter(r => r.agentType === "port-disruption");
+  const excursionsQuery = useQuery({ queryKey: ["excursions"], queryFn: api.excursions });
+  const recsQuery = useQuery({
+    queryKey: ["recommendations", "port-disruption"],
+    queryFn: () => api.recommendations("port-disruption"),
+  });
+  const timelineQuery = useQuery({
+    queryKey: ["timeline", "port-disruption"],
+    queryFn: () => api.timeline("port-disruption"),
+  });
+
+  const excursions = excursionsQuery.data ?? mockExcursions;
+  const recs = recsQuery.data ?? mockRecommendations.filter(r => r.agentType === "port-disruption");
+  const timeline = timelineQuery.data ?? mockTimeline;
 
   return (
     <div className="p-6 space-y-6 max-w-[1400px] mx-auto">
@@ -148,7 +159,7 @@ const PortDisruptionAgent = () => {
         <div className="space-y-4">
           <h2 className="text-sm font-semibold text-foreground">Activity Timeline</h2>
           <div className="rounded-lg border border-border bg-card p-4">
-            <AgentTimeline events={portDisruptionTimeline} />
+            <AgentTimeline events={timeline} />
           </div>
 
           <div className="rounded-lg border border-primary/30 bg-primary/5 p-4">

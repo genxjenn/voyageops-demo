@@ -3,9 +3,11 @@ import { Send, Bot, User, Sparkles, Loader2, RotateCcw, Copy, Check } from "luci
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import ReactMarkdown from "react-markdown";
-import { guests, incidents, excursions, venues, agentRecommendations, shipInfo } from "@/data/mockData";
+import { guests as mockGuests, incidents as mockIncidents, excursions as mockExcursions, venues as mockVenues, agentRecommendations as mockRecommendations, shipInfo as mockShipInfo } from "@/data/mockData";
 import { format } from "date-fns";
 import { toast } from "sonner";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/lib/api";
 
 interface ChatMessage {
   id: string;
@@ -61,64 +63,6 @@ interface AgentChatProps {
 // │   - Calls LLM with retrieved context                                       │
 // │   - Returns structured response for UI rendering                           │
 // └─────────────────────────────────────────────────────────────────────────────┘
-const MOCK_RESPONSES: Record<string, { patterns: RegExp[]; response: string }[]> = {
-  "general": [
-    {
-      patterns: [/ship|vessel|status/i],
-      response: `### 🚢 ${shipInfo.name} — Current Status\n\n| Detail | Value |\n|---|---|\n| **Voyage** | ${shipInfo.currentVoyage} |\n| **Location** | ${shipInfo.currentLocation} |\n| **Day** | ${shipInfo.voyageDay} of ${shipInfo.totalDays} |\n| **Passengers** | ${shipInfo.passengers.toLocaleString()} |\n| **Crew** | ${shipInfo.crew.toLocaleString()} |\n| **Next Port** | ${shipInfo.nextPort} (ETA: ${shipInfo.nextPortETA}) |\n| **Weather** | ${shipInfo.weatherCondition} |\n| **Sea State** | ${shipInfo.seaState} |\n\nAll three AI agents are **active** and monitoring operations in real-time.`,
-    },
-    {
-      patterns: [/recommend|suggestion|action/i],
-      response: `### 📋 Active Recommendations\n\nI found **${agentRecommendations.filter(r => r.status === "pending" || r.status === "reviewing").length}** pending recommendations across all agents:\n\n${agentRecommendations.filter(r => r.status === "pending" || r.status === "reviewing").map(r => `- **${r.title}** — Confidence: ${r.confidence}% | Impact: ${r.impact} | Status: \`${r.status}\``).join("\n")}\n\nWould you like me to drill into any specific recommendation?`,
-    },
-  ],
-  "guest-recovery": [
-    {
-      patterns: [/jane|doe|platinum.*guest|dining/i],
-      response: `### 🎯 Guest Recovery — Jane Doe (Platinum)\n\n**Incident:** INC-3021 — Dining service failure at Le Bordeaux\n\n**Guest Profile:**\n- Loyalty: **Platinum** (12 voyages)\n- Onboard Spend: **$4,820** (top 5% this voyage)\n- Lifetime Value: **$58,000+**\n- First complaint in 12 sailings\n\n**Root Cause Analysis:**\nLe Bordeaux was operating at **96% capacity** with **25% understaffing**. Average wait time: 35 min (normal: 8 min).\n\n**Recommended Recovery (94% confidence):**\n1. ✅ Issue **$200** onboard credit\n2. ✅ Personal apology from Hotel Director (within 2 hrs)\n3. ✅ Complimentary **Chef's Table** dinner ($450 value)\n4. ✅ Priority reservation guarantee for remaining voyage\n\n⚠️ Risk: Platinum guest churn after unresolved failures is **34%**. Recommend immediate action.`,
-    },
-    {
-      patterns: [/stark|suite|ac|cabin|critical/i],
-      response: `### 🔴 Critical — Suite Recovery: Stark Family\n\n**Incident:** INC-3022 — AC malfunction in Suite A-102\n\n**Guest Profile:**\n- **Sophia & Marco Stark** — Platinum (18 voyages)\n- Current spend: **$6,340** | Booking value: **$12,400**\n- Top 1% guest value\n\n**Situation:**\n- Temperature reached **82°F** in suite\n- Exterior temp: 88°F\n- Maintenance ETA: **18 hours** (part required)\n\n**Recommended Recovery (97% confidence):**\n1. 🏠 Upgrade to **Owner's Suite A-001** (currently vacant) — $2,800 value\n2. 💰 **$500 credit** + complimentary couples spa day — $750 value\n3. 🎫 Future voyage **20% discount** — $2,400 value\n\nSuite-level failures have **42% rebooking risk**. Immediate escalation recommended.`,
-    },
-    {
-      patterns: [/incident|open|active/i],
-      response: `### 📊 Active Incidents Summary\n\n${incidents.filter(i => i.status !== "closed").map(i => {
-        const guest = guests.find(g => g.id === i.guestId);
-        return `- **${i.id}** | ${i.severity.toUpperCase()} | ${guest?.name || "Unknown"} (${guest?.loyaltyTier})\n  ${i.description.slice(0, 80)}…\n  Status: \`${i.status}\``;
-      }).join("\n\n")}\n\nI can provide detailed recovery plans for any of these. Which incident should I analyze?`,
-    },
-  ],
-  "port-disruption": [
-    {
-      patterns: [/santorini|weather|wind|disrupt/i],
-      response: `### ⛈️ Santorini Port Disruption Alert\n\n**Forecast:** NOAA maritime advisory — winds **35-40 knots** expected March 16, 06:00-18:00\n\n**Impact Assessment:**\n- Tendering operations: **HIGH RISK**\n- Historical cancellation rate under similar conditions: **78%**\n- Guests affected: **142** (14 Platinum/Gold tier)\n- Revenue at risk: **$18,500**\n\n**Mitigation Plan (87% confidence):**\n1. 📱 Pre-notify **142 affected guests** via in-app + cabin notification\n2. 🔄 Activate **Mykonos rebooking** at no additional cost\n3. 🎭 Deploy **onboard alternatives** (cooking class, wine tasting, movie marathon)\n4. 💰 Process **automatic refunds** ($7,182)\n\nShall I execute any of these actions?`,
-    },
-    {
-      patterns: [/crete|vendor|wine|cancel/i],
-      response: `### 🍷 Vendor Cancellation — Crete Wine Experience\n\n**Vendor:** Cretan Flavors Co. cancelled due to staffing issues\n**Bookings affected:** 25 guests (8 premium packages)\n**Revenue impact:** $3,625 + $1,200 premium add-ons\n\n**Resolution (91% confidence):**\n1. ✅ Rebooked with **Cretan Heritage Wines** (92% satisfaction rating)\n   - Same itinerary, higher-rated guide\n2. ⭐ 8 premium guests upgraded to **private wine cave experience** at no extra cost\n\nStatus: **Approved** — awaiting execution.`,
-    },
-    {
-      patterns: [/excursion|port|schedule/i],
-      response: `### 🗺️ Excursion Status Overview\n\n| Excursion | Port | Status | Booked |\n|---|---|---|---|\n${excursions.map(e => `| ${e.name} | ${e.port} | \`${e.status}\` | ${e.booked}/${e.capacity} |`).join("\n")}\n\n**⚠️ Alerts:**\n- Santorini Sunset Catamaran: **DISRUPTED** (weather)\n- Crete Wine Experience: **CANCELLED** (vendor)\n\nI can provide detailed mitigation plans for any disrupted excursion.`,
-    },
-  ],
-  "onboard-ops": [
-    {
-      patterns: [/dining|restaurant|bordeaux|capacity|staff/i],
-      response: `### 🍽️ Dining Operations — Critical Alert\n\n**Le Bordeaux:** 🔴 OVERLOADED\n- Occupancy: **115/120** (96%)\n- Wait time: **35 min** (normal: 8 min)\n- Staffing: **12/16** (25% understaffed)\n\n**Lido Buffet:** 🟡 BUSY\n- Occupancy: **310/350** (89%)\n- Wait time: **20 min** (normal: 5 min)\n\n**Compass Bar:** 🟢 UNDERUTILIZED\n- Occupancy: **34/80** (43%)\n- Excess staff available: **2**\n\n**Rebalancing Plan (92% confidence):**\n1. 👥 Redeploy **4 staff** from Compass Bar → Le Bordeaux\n2. 🪑 Open **Atlas Lounge** as overflow dining\n3. 📱 Push **Compass Bar Happy Hour** notification (redirect 15-20% traffic)\n4. ⏰ Extend **Ocean Grill** hours to 22:00\n\nPrediction: Without action, Le Bordeaux exceeds capacity in **25 minutes**.`,
-    },
-    {
-      patterns: [/pool|deck|spa|recreation/i],
-      response: `### 🏊 Recreation & Wellness Status\n\n**Sky Pool:** 🔴 OVERLOADED (148/150 — 99%)\n- Filtration system flagged: pressure **+15%** above normal\n- Last serviced: 12 days ago (interval: 10 days)\n\n**Serenity Spa:** 🟡 BUSY\n- Wait time: **45 min**\n- Occupancy: 38/40\n\n**Action Plan (88% confidence):**\n1. 🔧 Schedule pool maintenance for **23:00** (overnight)\n2. 🏊 Open **Deck 14 overflow pool** (deploy 4 attendants)\n3. 💆 Promote **20% off afternoon spa** treatments\n\nThis should reduce Sky Pool density by ~30% within the hour.`,
-    },
-    {
-      patterns: [/venue|overview|all|status/i],
-      response: `### 📊 All Venue Status — Real-Time\n\n| Venue | Type | Deck | Occupancy | Wait | Staff | Status |\n|---|---|---|---|---|---|---|\n${venues.map(v => `| ${v.name} | ${v.type} | ${v.deck} | ${v.currentOccupancy}/${v.capacity} | ${v.waitTime}m | ${v.staffCount}/${v.optimalStaff} | \`${v.status}\` |`).join("\n")}\n\n**Summary:**\n- 🔴 **${venues.filter(v => v.status === "overloaded").length}** overloaded\n- 🟡 **${venues.filter(v => v.status === "busy").length}** busy\n- 🟢 **${venues.filter(v => v.status === "normal").length}** normal\n- 🔧 **${venues.filter(v => v.status === "maintenance").length}** maintenance\n\nRecommended: Immediate staff rebalancing from underutilized to overloaded venues.`,
-    },
-  ],
-};
-
 const FALLBACK_RESPONSE = "I'm analyzing the available data but couldn't find a specific match for your query. Try asking about:\n\n- **Guest incidents** and recovery plans\n- **Port disruptions** and excursion status\n- **Venue capacity** and staffing\n- **Ship status** and recommendations\n\nFor example: *\"What's the status of the Santorini excursion?\"* or *\"Show me active incidents\"*";
 
 // ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -140,16 +84,45 @@ const FALLBACK_RESPONSE = "I'm analyzing the available data but couldn't find a 
 // │   Same API shape; backend uses Server FTS + N1QL + external LLM           │
 // │   Backend can run as Couchbase Eventing Function or external service       │
 // └─────────────────────────────────────────────────────────────────────────────┘
-function getMockResponse(input: string, agentType: string): string {
-  const agentResponses = MOCK_RESPONSES[agentType] || [];
-  const generalResponses = MOCK_RESPONSES["general"] || [];
-  const allResponses = [...agentResponses, ...generalResponses];
+interface LiveChatData {
+  guests: typeof mockGuests;
+  incidents: typeof mockIncidents;
+  excursions: typeof mockExcursions;
+  venues: typeof mockVenues;
+  recommendations: typeof mockRecommendations;
+  shipInfo: typeof mockShipInfo;
+}
 
-  for (const entry of allResponses) {
-    if (entry.patterns.some(p => p.test(input))) {
-      return entry.response;
-    }
+function getAgentResponse(input: string, agentType: string, data: LiveChatData): string {
+  const text = input.toLowerCase();
+  const pending = data.recommendations.filter(r => r.status === "pending" || r.status === "reviewing");
+
+  if (/ship|vessel|status/.test(text)) {
+    return `### Ship Status\n\n| Detail | Value |\n|---|---|\n| Name | ${data.shipInfo.name} |\n| Voyage | ${data.shipInfo.currentVoyage} |\n| Location | ${data.shipInfo.currentLocation} |\n| Day | ${data.shipInfo.voyageDay}/${data.shipInfo.totalDays} |\n| Passengers | ${data.shipInfo.passengers.toLocaleString()} |\n| Crew | ${data.shipInfo.crew.toLocaleString()} |\n| Next Port | ${data.shipInfo.nextPort} (ETA: ${data.shipInfo.nextPortETA}) |\n| Weather | ${data.shipInfo.weatherCondition} |\n| Sea State | ${data.shipInfo.seaState} |`;
   }
+
+  if (/recommend|suggestion|action/.test(text)) {
+    return `### Active Recommendations\n\nPending or reviewing: **${pending.length}**\n\n${pending.map(r => `- **${r.title}** (${r.agentType}) | Confidence ${r.confidence}% | Status \`${r.status}\``).join("\n")}`;
+  }
+
+  if (agentType === "guest-recovery" && /incident|open|active|guest|recovery/.test(text)) {
+    const activeIncidents = data.incidents.filter(i => i.status !== "closed");
+    return `### Active Guest Incidents\n\n${activeIncidents.map(i => {
+      const guest = data.guests.find(g => g.id === i.guestId);
+      return `- **${i.id}** | ${i.severity.toUpperCase()} | ${guest?.name || "Unknown"}\n  ${i.type}: ${i.category}\n  Status: \`${i.status}\``;
+    }).join("\n\n")}`;
+  }
+
+  if (agentType === "port-disruption" && /excursion|port|weather|disrupt|cancel/.test(text)) {
+    return `### Excursion Status\n\n| Excursion | Port | Status | Booked |\n|---|---|---|---|\n${data.excursions.map(e => `| ${e.name} | ${e.port} | \`${e.status}\` | ${e.booked}/${e.capacity} |`).join("\n")}`;
+  }
+
+  if (agentType === "onboard-ops" && /venue|capacity|staff|dining|pool|ops/.test(text)) {
+    const overloaded = data.venues.filter(v => v.status === "overloaded");
+    const busy = data.venues.filter(v => v.status === "busy");
+    return `### Venue Operations\n\n| Venue | Occupancy | Wait | Staff | Status |\n|---|---|---|---|---|\n${data.venues.map(v => `| ${v.name} | ${v.currentOccupancy}/${v.capacity} | ${v.waitTime}m | ${v.staffCount}/${v.optimalStaff} | \`${v.status}\` |`).join("\n")}\n\nOverloaded: **${overloaded.length}**\nBusy: **${busy.length}**`;
+  }
+
   return FALLBACK_RESPONSE;
 }
 
@@ -180,6 +153,22 @@ function CopyButton({ content }: { content: string }) {
 }
 
 export function AgentChat({ agentType = "general", className }: AgentChatProps) {
+  const guestsQuery = useQuery({ queryKey: ["guests"], queryFn: api.guests });
+  const incidentsQuery = useQuery({ queryKey: ["incidents"], queryFn: api.incidents });
+  const excursionsQuery = useQuery({ queryKey: ["excursions"], queryFn: api.excursions });
+  const venuesQuery = useQuery({ queryKey: ["venues"], queryFn: api.venues });
+  const recommendationsQuery = useQuery({ queryKey: ["recommendations"], queryFn: () => api.recommendations() });
+  const shipInfoQuery = useQuery({ queryKey: ["shipInfo"], queryFn: api.shipInfo });
+
+  const liveData: LiveChatData = {
+    guests: guestsQuery.data ?? mockGuests,
+    incidents: incidentsQuery.data ?? mockIncidents,
+    excursions: excursionsQuery.data ?? mockExcursions,
+    venues: venuesQuery.data ?? mockVenues,
+    recommendations: recommendationsQuery.data ?? mockRecommendations,
+    shipInfo: shipInfoQuery.data ?? mockShipInfo,
+  };
+
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
@@ -241,9 +230,9 @@ export function AgentChat({ agentType = "general", className }: AgentChatProps) 
     setMessages(prev => [...prev, userMsg, assistantMsg]);
     setInput("");
 
-    const response = getMockResponse(messageText, agentType);
+    const response = getAgentResponse(messageText, agentType, liveData);
     setTimeout(() => simulateStreaming(response, assistantId), 400);
-  }, [input, isStreaming, agentType, simulateStreaming]);
+  }, [input, isStreaming, agentType, simulateStreaming, liveData]);
 
   // Keep ref in sync and listen for guided demo events
   handleSendRef.current = handleSend;

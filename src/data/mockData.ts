@@ -55,6 +55,7 @@ export interface Guest {
   bookingId: string;
   onboardSpend: number;
   sailingHistory: number;
+  notes?: string;
   avatar?: string;
 }
 
