@@ -486,7 +486,7 @@ export const agentRecommendations: AgentRecommendation[] = [
       { id: "A-007", label: "Future voyage 20% discount", type: "retention", estimatedValue: 2400, description: "Personalized rebooking offer for Mediterranean 2025" },
     ],
     createdAt: "2024-03-15T15:00:00Z",
-    relatedEntityId: "G-10424",
+    relatedEntityId: "guest339",
     relatedEntityType: "guest",
   },
   {

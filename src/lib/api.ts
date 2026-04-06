@@ -59,7 +59,7 @@ async function fetchJson<T>(path: string, params?: Record<string, string | undef
 
 export const api = {
   kpis: () => fetchJson<OperationalKPI[]>("/api/dashboard/kpis"),
-  incidents: (filters?: { severity?: string; status?: string }) => fetchJson<Incident[]>("/api/incidents", filters),
+  incidents: (filters?: { severity?: string; status?: string; guestId?: string }) => fetchJson<Incident[]>("/api/incidents", filters),
   excursions: () => fetchJson<Excursion[]>("/api/excursions"),
   venues: () => fetchJson<Venue[]>("/api/venues"),
   recommendations: (agentType?: string) =>

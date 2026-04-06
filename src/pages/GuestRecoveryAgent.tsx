@@ -1,5 +1,4 @@
 import { RecommendationCard } from "@/components/RecommendationCard";
-import { AgentTimeline } from "@/components/AgentTimeline";
 import { AgentChat } from "@/components/AgentChat";
 import { StatusBadge } from "@/components/StatusBadge";
 import { guests as mockGuests, incidents as mockIncidents, agentRecommendations as mockRecommendations, guestRecoveryTimeline as mockTimeline } from "@/data/mockData";
@@ -7,6 +6,55 @@ import { User, Crown, CreditCard, Ship, MessageSquare, Star } from "lucide-react
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { parseTimestamp } from "@/lib/utils";
+import { useState } from "react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
+
+function getGuestDisplayName(guest: { fullName?: string; name?: string } | undefined) {
+  return guest?.fullName ?? guest?.name ?? "Unknown guest";
+}
+
+function formatCurrency(value: number | undefined) {
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return "Unknown";
+  }
+
+  return value.toLocaleString("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 2,
+  });
+}
+
+function getLoyaltyValueMultiplier(loyaltyTier: string | undefined) {
+  switch (String(loyaltyTier).toUpperCase()) {
+    case "DIAMOND":
+      return 11;
+    case "EMERALD":
+      return 9;
+    case "PLATINUM":
+      return 8;
+    case "GOLD":
+      return 5;
+    case "SILVER":
+      return 3;
+    default:
+      return 2;
+  }
+}
+
+function getSeverityRisk(severity: string | undefined) {
+  switch (String(severity).toLowerCase()) {
+    case "critical":
+      return 18;
+    case "high":
+      return 12;
+    case "medium":
+      return 7;
+    default:
+      return 3;
+  }
+}
 
 // ┌─────────────────────────────────────────────────────────────────────────────┐
 // │ COUCHBASE INTEGRATION: Guest Recovery Agent Data                           │
@@ -29,26 +77,81 @@ import { parseTimestamp } from "@/lib/utils";
 // │     Docs: https://docs.couchbase.com/server/current/eventing/eventing-overview.html │
 // └─────────────────────────────────────────────────────────────────────────────┘
 const GuestRecoveryAgent = () => {
+  const [selectedRecIndex, setSelectedRecIndex] = useState("0");
+  const [revealedRecommendationIds, setRevealedRecommendationIds] = useState<string[]>([]);
+  
   const guestsQuery = useQuery({ queryKey: ["guests"], queryFn: api.guests });
-  const incidentsQuery = useQuery({ queryKey: ["incidents"], queryFn: api.incidents });
+  const guests = guestsQuery.data ?? mockGuests;
   const recsQuery = useQuery({
     queryKey: ["recommendations", "guest-recovery"],
     queryFn: () => api.recommendations("guest-recovery"),
   });
-  const timelineQuery = useQuery({
-    queryKey: ["timeline", "guest-recovery"],
-    queryFn: () => api.timeline("guest-recovery"),
-  });
+  const recs = recsQuery.data ?? mockRecommendations.filter(r => r.agentType === "guest-recovery");
+  
+  // Get selected recommendation and related guest
+  const selectedRec = recs[parseInt(selectedRecIndex)];
+  const guest = selectedRec && guests.length > 0 
+    ? guests.find(g => g.guestId === selectedRec.relatedEntityId) ?? guests[0]
+    : guests[0] ?? mockGuests[0];
+  
+  const incidentsQuery = useQuery({ queryKey: ["incidents", guest.guestId], queryFn: () => api.incidents({ guestId: guest.guestId }) });
+  const allIncidentsQuery = useQuery({ queryKey: ["incidents", "all"], queryFn: api.incidents });
+  const venuesQuery = useQuery({ queryKey: ["venues"], queryFn: api.venues });
 
-  const guests = guestsQuery.data ?? mockGuests;
-  const incidents = incidentsQuery.data ?? mockIncidents;
+  const incidents = incidentsQuery.data ?? (incidentsQuery.isError ? mockIncidents : []);
+  const allIncidents = allIncidentsQuery.data ?? (allIncidentsQuery.isError ? mockIncidents : []);
+  const venues = venuesQuery.data ?? [];
   const openIncidents = incidents.filter(inc => inc.status !== "closed");
   const closedIncidents = incidents.filter(inc => inc.status === "closed");
-  const recs = recsQuery.data ?? mockRecommendations.filter(r => r.agentType === "guest-recovery");
-  const timeline = timelineQuery.data ?? mockTimeline;
+  const incident = openIncidents[0] ?? incidents[0];
 
-  const guest = guests[0] ?? mockGuests[0];
-  const incident = openIncidents[0] ?? incidents[0] ?? mockIncidents[0];
+  const severityWeight: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
+  const statusWeight: Record<string, number> = { open: 1.2, reviewing: 1.1, approved: 1.0, executed: 0.8, closed: 0.2 };
+
+  const rankedIncidents = allIncidents
+    .map(inc => {
+      const relatedGuest = guests.find(g => g.guestId === inc.guestId);
+      const spend = Number(relatedGuest?.onboardSpend ?? 0);
+      const potential = Math.round(spend * (severityWeight[inc.severity] ?? 1) * (statusWeight[inc.status] ?? 1));
+      return { incident: inc, guest: relatedGuest, potential };
+    })
+    .sort((a, b) => b.potential - a.potential);
+
+  const visibleRecs = recs.filter(r => revealedRecommendationIds.includes(r.id));
+  const activeRecoveryPlan = visibleRecs.find(r => r.id === selectedRec?.id);
+  const scenarioVenue = incident?.description
+    ? venues.find(venue => incident.description.toLowerCase().includes(String(venue.name).toLowerCase()))
+    : undefined;
+  const occupancyPct = scenarioVenue && scenarioVenue.capacity > 0
+    ? Math.round((scenarioVenue.currentOccupancy / scenarioVenue.capacity) * 100)
+    : undefined;
+  const staffingGapPct = scenarioVenue && scenarioVenue.optimalStaff > 0
+    ? Math.max(0, Math.round(((scenarioVenue.optimalStaff - scenarioVenue.staffCount) / scenarioVenue.optimalStaff) * 100))
+    : undefined;
+  const actionValue = selectedRec?.actions.reduce((sum, action) => sum + (action.estimatedValue ?? 0), 0) ?? 0;
+  const spendValue = Number(guest?.onboardSpend ?? 0);
+  const protectedValue = Math.round((spendValue + actionValue) * getLoyaltyValueMultiplier(guest?.loyaltyTier));
+  const venueRisk = scenarioVenue?.status === "overloaded" ? 8 : scenarioVenue?.status === "busy" ? 4 : 0;
+  const beforeRisk = Math.min(48, getSeverityRisk(incident?.severity) + venueRisk + (String(guest?.loyaltyTier).toUpperCase() === "PLATINUM" ? 10 : 0) + (String(guest?.loyaltyTier).toUpperCase() === "DIAMOND" ? 12 : 0));
+  const afterRisk = Math.max(4, beforeRisk - Math.round((selectedRec?.confidence ?? 0) / 3) - Math.min(8, selectedRec?.actions.length ? selectedRec.actions.length * 2 : 0));
+  const actionLabels = selectedRec?.actions.map(action => action.label).join(", ") ?? "No recommended actions available.";
+
+  const handleChatCommand = (command: string) => {
+    const normalized = command.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+    const nextIds = new Set(revealedRecommendationIds);
+
+    if (normalized.includes("analyze jane doe incident") || (normalized.includes("jane") && normalized.includes("incident"))) {
+      const janeRec = recs.find(r => /jane doe/i.test(r.title) || /jane doe/i.test(r.summary));
+      if (janeRec) nextIds.add(janeRec.id);
+    }
+
+    if (normalized.includes("show stark family recovery plan") || (normalized.includes("stark") && normalized.includes("recovery"))) {
+      const starkRec = recs.find(r => /stark/i.test(r.title) || /stark/i.test(r.summary));
+      if (starkRec) nextIds.add(starkRec.id);
+    }
+
+    setRevealedRecommendationIds(Array.from(nextIds));
+  };
 
   return (
     <div className="p-6 space-y-6 max-w-[1400px] mx-auto">
@@ -58,11 +161,30 @@ const GuestRecoveryAgent = () => {
       </div>
 
       {/* NLP Chat Interface */}
-      <AgentChat agentType="guest-recovery" className="h-[520px]" />
+      <AgentChat agentType="guest-recovery" className="h-[520px]" onCommand={handleChatCommand} />
 
       <div className="grid gap-6 lg:grid-cols-3">
         {/* Left Column - Guest Profile & Incident */}
         <div className="space-y-4">
+          {/* Recommendation Selector */}
+          {recs.length > 0 && (
+            <div className="rounded-lg border border-border bg-card p-4">
+              <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground block mb-2">Select Guest Recovery Case</label>
+              <Select value={selectedRecIndex} onValueChange={setSelectedRecIndex}>
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder="Select a case" />
+                </SelectTrigger>
+                <SelectContent>
+                  {recs.map((rec, idx) => (
+                    <SelectItem key={rec.id} value={idx.toString()}>
+                      {rec.title}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+          
           {/* Guest Profile */}
           <div className="rounded-lg border border-border bg-card p-4">
             <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Guest Profile</h2>
@@ -108,17 +230,23 @@ const GuestRecoveryAgent = () => {
             <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-2">
               <MessageSquare className="h-3.5 w-3.5 text-destructive" /> Active Incident
             </h2>
-            <div className="flex items-center gap-2 mb-2">
-              <span className="text-xs font-mono text-muted-foreground">{incident.id}</span>
-              <StatusBadge status={incident.severity} />
-              <StatusBadge status={incident.status} />
-            </div>
-            <p className="text-sm font-medium text-foreground">{incident.type}: {incident.category}</p>
-            <p className="mt-1.5 text-xs text-muted-foreground leading-relaxed">{incident.description}</p>
-            <div className="mt-3 flex gap-4 text-xs text-muted-foreground">
-              <span>Reported: {parseTimestamp(incident.createdAt).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}</span>
-              <span>Updated: {parseTimestamp(incident.updatedAt).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}</span>
-            </div>
+            {incident ? (
+              <>
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-xs font-mono text-muted-foreground">{incident.id}</span>
+                  <StatusBadge status={incident.severity} />
+                  <StatusBadge status={incident.status} />
+                </div>
+                <p className="text-sm font-medium text-foreground">{incident.type}: {incident.category}</p>
+                <p className="mt-1.5 text-xs text-muted-foreground leading-relaxed">{incident.description}</p>
+                <div className="mt-3 flex gap-4 text-xs text-muted-foreground">
+                  <span>Reported: {parseTimestamp(incident.createdAt).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}</span>
+                  <span>Updated: {parseTimestamp(incident.updatedAt).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}</span>
+                </div>
+              </>
+            ) : (
+              <p className="text-sm text-muted-foreground">No incidents found for this guest.</p>
+            )}
           </div>
 
           {/* All Active Incidents */}
@@ -137,7 +265,7 @@ const GuestRecoveryAgent = () => {
               </div>
             </div>
             <div className="space-y-2">
-              {openIncidents.map(inc => (
+              {incidents.map(inc => (
                 <div key={inc.id} className="flex items-center justify-between gap-2 rounded bg-muted p-2 text-xs">
                   <div className="min-w-0">
                     <div className="flex items-center gap-1.5">
@@ -153,29 +281,83 @@ const GuestRecoveryAgent = () => {
           </div>
         </div>
 
-        {/* Center Column - Recommendations */}
+        {/* Center Column - Ranked Incidents */}
         <div className="space-y-4">
-          <h2 className="text-sm font-semibold text-foreground">Agent Recommendations ({recs.length})</h2>
-          {recs.map(rec => (
-            <RecommendationCard key={rec.id} recommendation={rec} />
+          <h2 className="text-sm font-semibold text-foreground">Incidents Ranked by Lost Revenue Potential ({rankedIncidents.length})</h2>
+          {rankedIncidents.map(({ incident: rankedIncident, guest: rankedGuest, potential }, index) => (
+            <div key={rankedIncident.id} className="rounded-lg border border-border bg-card p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">#{index + 1} Risk Priority</p>
+                  <p className="text-sm font-semibold text-foreground">{rankedGuest?.fullName ?? rankedGuest?.name ?? "Unknown Guest"}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-xs text-muted-foreground">Est. Lost Revenue Potential</p>
+                  <p className="text-sm font-semibold text-destructive">${potential.toLocaleString()}</p>
+                </div>
+              </div>
+              <div className="mt-3 flex items-center gap-2 text-xs">
+                <span className="font-mono text-muted-foreground">{rankedIncident.id}</span>
+                <StatusBadge status={rankedIncident.severity} />
+                <StatusBadge status={rankedIncident.status} />
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground line-clamp-2">{rankedIncident.type}: {rankedIncident.category} - {rankedIncident.description}</p>
+            </div>
           ))}
+
+          {visibleRecs.length > 0 && (
+            <>
+              <h2 className="pt-2 text-sm font-semibold text-foreground">Agent Recommendations ({visibleRecs.length})</h2>
+              {visibleRecs.map(rec => (
+                <RecommendationCard key={rec.id} recommendation={rec} />
+              ))}
+            </>
+          )}
         </div>
 
-        {/* Right Column - Timeline */}
+        {/* Right Column - Approval Queue */}
         <div className="space-y-4">
-          <h2 className="text-sm font-semibold text-foreground">Activity Timeline</h2>
+          <h2 className="text-sm font-semibold text-foreground">Recovery Plan Approval Queue</h2>
           <div className="rounded-lg border border-border bg-card p-4">
-            <AgentTimeline events={timeline} />
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              Each recommendation can be staged for human approval here. In the demo, these `APPROVE` actions are placeholders for downstream workflow triggers such as credits, notifications, reservations, and service recovery tasks.
+            </p>
+
+            {activeRecoveryPlan ? (
+              <div className="mt-4 space-y-3">
+                {activeRecoveryPlan.actions.map((action, index) => (
+                  <div key={action.id} className="rounded-lg border border-border bg-muted/30 p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Action {index + 1}</p>
+                        <p className="mt-1 text-sm font-medium text-foreground">{action.label}</p>
+                        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{action.description}</p>
+                        {action.estimatedValue ? (
+                          <p className="mt-2 text-xs font-medium text-foreground">Estimated value: {formatCurrency(action.estimatedValue)}</p>
+                        ) : null}
+                      </div>
+                      <Button type="button" size="sm" className="shrink-0" onClick={() => undefined}>
+                        APPROVE
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-4 text-sm text-muted-foreground">
+                No recovery plan is awaiting approval yet. Ask the chat to analyze the selected guest case to reveal the recommended actions.
+              </p>
+            )}
           </div>
 
           {/* Demo Scenario */}
           <div className="rounded-lg border border-primary/30 bg-primary/5 p-4">
             <h3 className="text-xs font-semibold uppercase tracking-wider text-primary mb-2">Demo Scenario</h3>
             <div className="text-xs text-muted-foreground space-y-2 leading-relaxed">
-              <p><strong className="text-foreground">Trigger:</strong> Platinum guest Jane Doe filed a dining complaint after a 45-minute wait at Le Bordeaux, despite having a priority reservation.</p>
-               <p><strong className="text-foreground">Analysis:</strong> The agent correlated her loyalty tier (Platinum, 12 voyages), onboard spend ($4,820 — top 5%), and the fact this is her first complaint ever, with venue data showing Le Bordeaux at 96% capacity with 25% understaffing.</p>
-              <p><strong className="text-foreground">Recommendation:</strong> 4-action recovery plan including $200 credit, personal Hotel Director apology, complimentary Chef's Table dinner, and priority reservation guarantee.</p>
-              <p><strong className="text-foreground">Outcome:</strong> Estimated $58,000+ lifetime value protected. Churn risk reduced from 34% to under 5%.</p>
+              <p><strong className="text-foreground">Trigger:</strong> {incident ? `${getGuestDisplayName(guest)} was linked to ${incident.type.toLowerCase()} in ${incident.category}. ${incident.description}` : `No active incident is currently associated with ${getGuestDisplayName(guest)}.`}</p>
+              <p><strong className="text-foreground">Analysis:</strong> The agent correlated booking {guest?.bookingId ?? "Unknown"}, loyalty tier {guest?.loyaltyTier ?? "Unknown"}, sailing history {typeof guest?.sailingHistory === "number" ? `${guest.sailingHistory} voyages` : "Unknown"}, and onboard spend {formatCurrency(guest?.onboardSpend)}{scenarioVenue ? ` with ${scenarioVenue.name} operating at ${occupancyPct}% capacity${staffingGapPct ? ` and ${staffingGapPct}% understaffing` : ""}${typeof scenarioVenue.waitTime === "number" ? ` plus a ${scenarioVenue.waitTime}-minute wait time` : ""}` : ""}.</p>
+              <p><strong className="text-foreground">Recommendation:</strong> {selectedRec ? `${selectedRec.actions.length}-action recovery plan: ${actionLabels}.` : "No live recovery recommendation is currently available for this case."}</p>
+              <p><strong className="text-foreground">Outcome:</strong> {selectedRec ? `Estimated ${formatCurrency(protectedValue)} in future value protected. Churn risk reduced from ${beforeRisk}% to ${afterRisk}% based on current guest value, incident severity, and the recommended actions.` : `Outcome cannot be estimated until a recommendation is available.`}</p>
             </div>
           </div>
         </div>

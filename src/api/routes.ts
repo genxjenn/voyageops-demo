@@ -64,10 +64,12 @@ router.get('/incidents', async (req, res) => {
   try {
     const severity = req.query.severity;
     const status = req.query.status;
+    const guestId = req.query.guestId;
     const filterParts: string[] = [];
     const params: any = {};
     if (severity) { filterParts.push('i.severity = $severity'); params.severity = severity; }
     if (status) { filterParts.push('i.status = $status'); params.status = status; }
+    if (guestId) { filterParts.push('i.guestId = $guestId'); params.guestId = guestId; }
 
     const where = filterParts.length ? `WHERE ${filterParts.join(' AND ')}` : '';
     const q = `SELECT i.* FROM voyageops.guests.incidents i ${where} ORDER BY i.createdAt DESC`;
