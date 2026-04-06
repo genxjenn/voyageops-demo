@@ -42,11 +42,13 @@ const GuestRecoveryAgent = () => {
 
   const guests = guestsQuery.data ?? mockGuests;
   const incidents = incidentsQuery.data ?? mockIncidents;
+  const openIncidents = incidents.filter(inc => inc.status !== "closed");
+  const closedIncidents = incidents.filter(inc => inc.status === "closed");
   const recs = recsQuery.data ?? mockRecommendations.filter(r => r.agentType === "guest-recovery");
   const timeline = timelineQuery.data ?? mockTimeline;
 
   const guest = guests[0] ?? mockGuests[0];
-  const incident = incidents[0] ?? mockIncidents[0];
+  const incident = openIncidents[0] ?? incidents[0] ?? mockIncidents[0];
 
   return (
     <div className="p-6 space-y-6 max-w-[1400px] mx-auto">
@@ -121,9 +123,21 @@ const GuestRecoveryAgent = () => {
 
           {/* All Active Incidents */}
           <div className="rounded-lg border border-border bg-card p-4">
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">All Guest Incidents ({incidents.length})</h2>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">All Guest Incidents</h2>
+              <div className="flex gap-4 text-xs">
+                <div className="text-right">
+                  <span className="text-muted-foreground block">Open</span>
+                  <span className="font-semibold text-foreground">{openIncidents.length}</span>
+                </div>
+                <div className="text-right">
+                  <span className="text-muted-foreground block">Closed</span>
+                  <span className="font-semibold text-foreground">{closedIncidents.length}</span>
+                </div>
+              </div>
+            </div>
             <div className="space-y-2">
-              {incidents.map(inc => (
+              {openIncidents.map(inc => (
                 <div key={inc.id} className="flex items-center justify-between gap-2 rounded bg-muted p-2 text-xs">
                   <div className="min-w-0">
                     <div className="flex items-center gap-1.5">
