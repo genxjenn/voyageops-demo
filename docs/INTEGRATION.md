@@ -15,14 +15,13 @@
 4. [Bucket & Collection Schema](#4-bucket--collection-schema)
 5. [Couchbase SDK Accessors (db object)](#5-couchbase-sdk-accessors-db-object)
 6. [Capella Eventing Configuration](#6-capella-eventing-configuration)
-7. [Vector Retrieval — Incidents](#7-vector-retrieval--incidents)
-8. [Agent Seed Data](#8-agent-seed-data)
-9. [Integration Points by File](#9-integration-points-by-file)
-10. [Migration Steps](#10-migration-steps)
-11. [Query Reference](#11-query-reference)
-12. [AI & NLP Integration](#12-ai--nlp-integration)
-13. [Real-Time Features](#13-real-time-features)
-14. [Security & Connection Management](#14-security--connection-management)
+7. [Agent Seed Data](#8-agent-seed-data)
+8. [Integration Points by File](#9-integration-points-by-file)
+9. [Migration Steps](#10-migration-steps)
+10. [Query Reference](#11-query-reference)
+11. [AI & NLP Integration](#12-ai--nlp-integration)
+12. [Real-Time Features](#13-real-time-features)
+13. [Security & Connection Management](#14-security--connection-management)
 
 ---
 
