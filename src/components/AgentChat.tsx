@@ -333,7 +333,7 @@ export function AgentChat({ agentType = "general", className, onCommand }: Agent
     scrollToBottom();
   }, [messages, scrollToBottom]);
 
-  const simulateStreaming = useCallback((fullText: string, msgId: string) => {
+  const simulateStreaming = useCallback((fullText: string, msgId: string, onComplete?: () => void) => {
     setIsStreaming(true);
     let charIndex = 0;
     const chunkSize = 3;
@@ -346,6 +346,7 @@ export function AgentChat({ agentType = "general", className, onCommand }: Agent
           prev.map(m => m.id === msgId ? { ...m, content: fullText, isStreaming: false } : m)
         );
         setIsStreaming(false);
+        onComplete?.();
         return;
       }
       setMessages(prev =>
@@ -357,8 +358,6 @@ export function AgentChat({ agentType = "general", className, onCommand }: Agent
   const handleSend = useCallback(async (text?: string) => {
     const messageText = text || input.trim();
     if (!messageText || isStreaming) return;
-
-    onCommand?.(messageText);
 
     const userMsg: ChatMessage = {
       id: `user-${Date.now()}`,
@@ -393,7 +392,11 @@ export function AgentChat({ agentType = "general", className, onCommand }: Agent
       response = getAgentResponse(messageText, agentType, liveData);
     }
 
-    setTimeout(() => simulateStreaming(response, assistantId), 400);
+    setTimeout(() => {
+      simulateStreaming(response, assistantId, () => {
+        onCommand?.(messageText);
+      });
+    }, 400);
   }, [input, isStreaming, agentType, simulateStreaming, liveData, onCommand]);
 
   // Keep ref in sync and listen for guided demo events

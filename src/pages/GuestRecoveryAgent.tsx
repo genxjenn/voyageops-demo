@@ -174,11 +174,17 @@ const GuestRecoveryAgent = () => {
 
   const handleChatCommand = (command: string) => {
     const normalized = command.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+    const asksForPlan = normalized.includes("plan") || normalized.includes("approve") || normalized.includes("queue");
     const nextIds = new Set(revealedRecommendationIds);
     let nextActiveRecommendationId = activeRecommendationId;
     let nextSelectedGuestId = selectedGuestId;
 
-    if (normalized.includes("analyze jane doe incident") || (normalized.includes("jane") && normalized.includes("incident"))) {
+    if (
+      normalized.includes("analyze jane doe incident")
+      || normalized.includes("jane doe")
+      || (normalized.includes("jane") && normalized.includes("incident"))
+      || (normalized.includes("jane") && asksForPlan)
+    ) {
       const janeRec = recs.find(r => /jane doe/i.test(r.title) || /jane doe/i.test(r.summary));
       if (janeRec) {
         nextIds.add(janeRec.id);
@@ -189,7 +195,12 @@ const GuestRecoveryAgent = () => {
       }
     }
 
-    if (normalized.includes("show stark family recovery plan") || (normalized.includes("stark") && normalized.includes("recovery"))) {
+    if (
+      normalized.includes("show stark family recovery plan")
+      || normalized.includes("stark family")
+      || (normalized.includes("stark") && normalized.includes("recovery"))
+      || (normalized.includes("stark") && asksForPlan)
+    ) {
       const starkRec = recs.find(r => /stark/i.test(r.title) || /stark/i.test(r.summary));
       if (starkRec) {
         nextIds.add(starkRec.id);
@@ -197,6 +208,15 @@ const GuestRecoveryAgent = () => {
         if (starkRec.relatedEntityId) {
           nextSelectedGuestId = starkRec.relatedEntityId;
         }
+      }
+    }
+
+    // If user asks for a plan without naming a guest, activate the currently selected guest plan.
+    if (asksForPlan && nextActiveRecommendationId === activeRecommendationId) {
+      const selectedGuestRec = recs.find(r => r.relatedEntityId === selectedGuestId);
+      if (selectedGuestRec) {
+        nextIds.add(selectedGuestRec.id);
+        nextActiveRecommendationId = selectedGuestRec.id;
       }
     }
 
