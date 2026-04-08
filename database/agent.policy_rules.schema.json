@@ -1,0 +1,27 @@
+{
+  "$id": "voAgent.policy_rules",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "ruleId",
+    "agentType",
+    "name",
+    "enabled",
+    "priority",
+    "createdAt",
+    "updatedAt"
+  ],
+  "properties": {
+    "ruleId": { "type": "string", "minLength": 1 },
+    "agentType": { "type": "string", "enum": ["guest-recovery"] },
+    "name": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "incidentType": { "type": "string" },
+    "severity": { "type": "string", "enum": ["critical", "high", "medium", "low"] },
+    "enabled": { "type": "boolean" },
+    "priority": { "type": "integer", "minimum": 0 },
+    "constraints": { "type": "object" },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  }
+}

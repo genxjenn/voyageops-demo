@@ -6,12 +6,28 @@ import { User, Crown, CreditCard, Ship, MessageSquare, Star } from "lucide-react
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { parseTimestamp } from "@/lib/utils";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 
 function getGuestDisplayName(guest: { fullName?: string; name?: string } | undefined) {
   return guest?.fullName ?? guest?.name ?? "Unknown guest";
+}
+
+function findGuestById(
+  guests: Array<{ guestId?: string; id?: string; fullName?: string; name?: string }>,
+  guestId: string | undefined,
+) {
+  if (!guestId) return undefined;
+  return guests.find(g => g.guestId === guestId || g.id === guestId);
+}
+
+function getGuestIdentifier(guest: { guestId?: string; id?: string } | undefined) {
+  return guest?.guestId ?? guest?.id;
+}
+
+function getIncidentIdentifier(incident: { incidentId?: string; id?: string } | undefined) {
+  return incident?.incidentId ?? incident?.id ?? "Unknown incident";
 }
 
 function formatCurrency(value: number | undefined) {
@@ -77,8 +93,9 @@ function getSeverityRisk(severity: string | undefined) {
 // │     Docs: https://docs.couchbase.com/server/current/eventing/eventing-overview.html │
 // └─────────────────────────────────────────────────────────────────────────────┘
 const GuestRecoveryAgent = () => {
-  const [selectedRecIndex, setSelectedRecIndex] = useState("0");
+  const [selectedGuestId, setSelectedGuestId] = useState("");
   const [revealedRecommendationIds, setRevealedRecommendationIds] = useState<string[]>([]);
+  const [activeRecommendationId, setActiveRecommendationId] = useState<string>("");
   
   const guestsQuery = useQuery({ queryKey: ["guests"], queryFn: api.guests });
   const guests = guestsQuery.data ?? mockGuests;
@@ -87,19 +104,14 @@ const GuestRecoveryAgent = () => {
     queryFn: () => api.recommendations("guest-recovery"),
   });
   const recs = recsQuery.data ?? mockRecommendations.filter(r => r.agentType === "guest-recovery");
+  const hasLiveGuests = Boolean(guestsQuery.data && guestsQuery.data.length > 0);
   
-  // Get selected recommendation and related guest
-  const selectedRec = recs[parseInt(selectedRecIndex)];
-  const guest = selectedRec && guests.length > 0 
-    ? guests.find(g => g.guestId === selectedRec.relatedEntityId) ?? guests[0]
-    : guests[0] ?? mockGuests[0];
-  
-  const incidentsQuery = useQuery({ queryKey: ["incidents", guest.guestId], queryFn: () => api.incidents({ guestId: guest.guestId }) });
+  const incidentsQuery = useQuery({ queryKey: ["incidents", selectedGuestId], queryFn: () => api.incidents({ guestId: selectedGuestId }), enabled: Boolean(selectedGuestId) });
   const allIncidentsQuery = useQuery({ queryKey: ["incidents", "all"], queryFn: api.incidents });
   const venuesQuery = useQuery({ queryKey: ["venues"], queryFn: api.venues });
 
-  const incidents = incidentsQuery.data ?? (incidentsQuery.isError ? mockIncidents : []);
-  const allIncidents = allIncidentsQuery.data ?? (allIncidentsQuery.isError ? mockIncidents : []);
+  const incidents = incidentsQuery.data ?? (hasLiveGuests ? [] : mockIncidents);
+  const allIncidents = allIncidentsQuery.data ?? incidentsQuery.data ?? (hasLiveGuests ? [] : mockIncidents);
   const venues = venuesQuery.data ?? [];
   const openIncidents = incidents.filter(inc => inc.status !== "closed");
   const closedIncidents = incidents.filter(inc => inc.status === "closed");
@@ -110,12 +122,36 @@ const GuestRecoveryAgent = () => {
 
   const rankedIncidents = allIncidents
     .map(inc => {
-      const relatedGuest = guests.find(g => g.guestId === inc.guestId);
+      const relatedGuest = findGuestById(guests, inc.guestId);
       const spend = Number(relatedGuest?.onboardSpend ?? 0);
       const potential = Math.round(spend * (severityWeight[inc.severity] ?? 1) * (statusWeight[inc.status] ?? 1));
       return { incident: inc, guest: relatedGuest, potential };
     })
     .sort((a, b) => b.potential - a.potential);
+
+  const topRankedIncidents = rankedIncidents.slice(0, 10);
+  const topGuestIds = Array.from(
+    new Set(
+      topRankedIncidents
+        .map(({ incident: rankedIncident }) => rankedIncident.guestId)
+        .filter((guestId): guestId is string => Boolean(guestId)),
+    ),
+  );
+  const topGuestOptions = topGuestIds.map(guestId => ({
+    guestId,
+    guest: findGuestById(guests, guestId),
+  }));
+
+  useEffect(() => {
+    if (!selectedGuestId && topGuestIds.length > 0) {
+      setSelectedGuestId(topGuestIds[0]);
+    }
+  }, [selectedGuestId, topGuestIds]);
+
+  const guest = findGuestById(guests, selectedGuestId) ?? topGuestOptions[0]?.guest ?? guests[0] ?? mockGuests[0];
+  const selectedRec = recs.find(r => r.id === activeRecommendationId)
+    ?? recs.find(r => r.relatedEntityId === getGuestIdentifier(guest))
+    ?? recs[0];
 
   const visibleRecs = recs.filter(r => revealedRecommendationIds.includes(r.id));
   const activeRecoveryPlan = visibleRecs.find(r => r.id === selectedRec?.id);
@@ -139,18 +175,36 @@ const GuestRecoveryAgent = () => {
   const handleChatCommand = (command: string) => {
     const normalized = command.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
     const nextIds = new Set(revealedRecommendationIds);
+    let nextActiveRecommendationId = activeRecommendationId;
+    let nextSelectedGuestId = selectedGuestId;
 
     if (normalized.includes("analyze jane doe incident") || (normalized.includes("jane") && normalized.includes("incident"))) {
       const janeRec = recs.find(r => /jane doe/i.test(r.title) || /jane doe/i.test(r.summary));
-      if (janeRec) nextIds.add(janeRec.id);
+      if (janeRec) {
+        nextIds.add(janeRec.id);
+        nextActiveRecommendationId = janeRec.id;
+        if (janeRec.relatedEntityId) {
+          nextSelectedGuestId = janeRec.relatedEntityId;
+        }
+      }
     }
 
     if (normalized.includes("show stark family recovery plan") || (normalized.includes("stark") && normalized.includes("recovery"))) {
       const starkRec = recs.find(r => /stark/i.test(r.title) || /stark/i.test(r.summary));
-      if (starkRec) nextIds.add(starkRec.id);
+      if (starkRec) {
+        nextIds.add(starkRec.id);
+        nextActiveRecommendationId = starkRec.id;
+        if (starkRec.relatedEntityId) {
+          nextSelectedGuestId = starkRec.relatedEntityId;
+        }
+      }
     }
 
     setRevealedRecommendationIds(Array.from(nextIds));
+    setActiveRecommendationId(nextActiveRecommendationId);
+    if (nextSelectedGuestId && nextSelectedGuestId !== selectedGuestId) {
+      setSelectedGuestId(nextSelectedGuestId);
+    }
   };
 
   return (
@@ -166,20 +220,24 @@ const GuestRecoveryAgent = () => {
       <div className="grid gap-6 lg:grid-cols-3">
         {/* Left Column - Guest Profile & Incident */}
         <div className="space-y-4">
-          {/* Recommendation Selector */}
-          {recs.length > 0 && (
+          {/* Top 10 Guest Selector */}
+          {topGuestOptions.length > 0 && (
             <div className="rounded-lg border border-border bg-card p-4">
-              <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground block mb-2">Select Guest Recovery Case</label>
-              <Select value={selectedRecIndex} onValueChange={setSelectedRecIndex}>
+              <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground block mb-2">Select Top-10 Ranked Guest</label>
+              <Select value={selectedGuestId} onValueChange={setSelectedGuestId}>
                 <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Select a case" />
+                  <SelectValue placeholder="Select a guest" />
                 </SelectTrigger>
                 <SelectContent>
-                  {recs.map((rec, idx) => (
-                    <SelectItem key={rec.id} value={idx.toString()}>
-                      {rec.title}
+                  {topGuestOptions.map(({ guestId, guest: optionGuest }, idx) => {
+                    const displayName = optionGuest ? getGuestDisplayName(optionGuest) : `Guest ${guestId}`;
+
+                    return (
+                    <SelectItem key={String(guestId)} value={String(guestId)}>
+                      #{idx + 1} {displayName}
                     </SelectItem>
-                  ))}
+                    );
+                  })}
                 </SelectContent>
               </Select>
             </div>
@@ -193,7 +251,7 @@ const GuestRecoveryAgent = () => {
                 <User className="h-6 w-6 text-primary" />
               </div>
               <div className="flex-1">
-                <p className="font-semibold text-foreground">{guest.name}</p>
+                <p className="font-semibold text-foreground">{getGuestDisplayName(guest)}</p>
                 <div className="flex items-center gap-1.5 mt-1">
                   <Crown className="h-3 w-3 text-warning" />
                   <span className="text-xs font-medium text-warning">{guest.loyaltyTier}</span>
@@ -216,7 +274,7 @@ const GuestRecoveryAgent = () => {
               </div>
               <div className="rounded bg-muted p-2">
                 <span className="text-muted-foreground flex items-center gap-1"><Ship className="h-3 w-3" />Sailing History</span>
-                <p className="font-medium text-foreground">{guest.sailingHistory} voyages</p>
+                <p className="font-medium text-foreground">{guest.sailingHistory ?? guest.sailingHistoryAvg ?? "Unknown"} voyages</p>
               </div>
             </div>
             <div className="mt-3 rounded bg-muted p-2 text-xs">
@@ -233,7 +291,7 @@ const GuestRecoveryAgent = () => {
             {incident ? (
               <>
                 <div className="flex items-center gap-2 mb-2">
-                  <span className="text-xs font-mono text-muted-foreground">{incident.id}</span>
+                  <span className="text-xs font-mono text-muted-foreground">{getIncidentIdentifier(incident)}</span>
                   <StatusBadge status={incident.severity} />
                   <StatusBadge status={incident.status} />
                 </div>
@@ -266,10 +324,10 @@ const GuestRecoveryAgent = () => {
             </div>
             <div className="space-y-2">
               {incidents.map(inc => (
-                <div key={inc.id} className="flex items-center justify-between gap-2 rounded bg-muted p-2 text-xs">
+                <div key={getIncidentIdentifier(inc)} className="flex items-center justify-between gap-2 rounded bg-muted p-2 text-xs">
                   <div className="min-w-0">
                     <div className="flex items-center gap-1.5">
-                      <span className="font-mono text-muted-foreground">{inc.id}</span>
+                      <span className="font-mono text-muted-foreground">{getIncidentIdentifier(inc)}</span>
                       <StatusBadge status={inc.severity} />
                     </div>
                     <p className="text-foreground mt-0.5 truncate">{inc.type}: {inc.category}</p>
@@ -283,9 +341,9 @@ const GuestRecoveryAgent = () => {
 
         {/* Center Column - Ranked Incidents */}
         <div className="space-y-4">
-          <h2 className="text-sm font-semibold text-foreground">Incidents Ranked by Lost Revenue Potential ({rankedIncidents.length})</h2>
-          {rankedIncidents.map(({ incident: rankedIncident, guest: rankedGuest, potential }, index) => (
-            <div key={rankedIncident.id} className="rounded-lg border border-border bg-card p-4">
+          <h2 className="text-sm font-semibold text-foreground">Incidents Ranked by Lost Revenue Potential ({topRankedIncidents.length})</h2>
+          {topRankedIncidents.map(({ incident: rankedIncident, guest: rankedGuest, potential }, index) => (
+            <div key={getIncidentIdentifier(rankedIncident)} className="rounded-lg border border-border bg-card p-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">#{index + 1} Risk Priority</p>
@@ -297,7 +355,7 @@ const GuestRecoveryAgent = () => {
                 </div>
               </div>
               <div className="mt-3 flex items-center gap-2 text-xs">
-                <span className="font-mono text-muted-foreground">{rankedIncident.id}</span>
+                <span className="font-mono text-muted-foreground">{getIncidentIdentifier(rankedIncident)}</span>
                 <StatusBadge status={rankedIncident.severity} />
                 <StatusBadge status={rankedIncident.status} />
               </div>
@@ -322,6 +380,13 @@ const GuestRecoveryAgent = () => {
             <p className="text-xs text-muted-foreground leading-relaxed">
               Each recommendation can be staged for human approval here. In the demo, these `APPROVE` actions are placeholders for downstream workflow triggers such as credits, notifications, reservations, and service recovery tasks.
             </p>
+
+            <div className="mt-3 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs">
+              <span className="text-muted-foreground">Active Plan:</span>{" "}
+              <span className="font-semibold text-foreground">
+                {activeRecoveryPlan ? activeRecoveryPlan.title : "None selected"}
+              </span>
+            </div>
 
             {activeRecoveryPlan ? (
               <div className="mt-4 space-y-3">

@@ -29,6 +29,16 @@ interface GuestWithIncidents {
   incidents: Incident[];
 }
 
+interface AgentQueryResponse {
+  response: string;
+  incidents?: Incident[];
+  metadata?: {
+    retrievalMode?: string;
+    indexesAttempted?: string[];
+    indexesUsed?: string[];
+  };
+}
+
 function getApiBaseUrl() {
   return import.meta.env.VITE_API_BASE_URL || "";
 }
@@ -57,6 +67,24 @@ async function fetchJson<T>(path: string, params?: Record<string, string | undef
   return (await res.json()) as T;
 }
 
+async function postJson<T>(path: string, body: unknown) {
+  const base = getApiBaseUrl();
+  const url = new URL(path, base ? `${base.replace(/\/$/, "")}/` : window.location.origin);
+
+  const res = await fetch(url.toString(), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `Request failed: ${res.status}`);
+  }
+
+  return (await res.json()) as T;
+}
+
 export const api = {
   kpis: () => fetchJson<OperationalKPI[]>("/api/dashboard/kpis"),
   incidents: (filters?: { severity?: string; status?: string; guestId?: string }) => fetchJson<Incident[]>("/api/incidents", filters),
@@ -69,6 +97,8 @@ export const api = {
   shipInfo: () => fetchJson<ShipInfo>("/api/ship-info"),
   guests: () => fetchJson<Guest[]>("/api/guests"),
   guestWithIncidents: (id: string) => fetchJson<GuestWithIncidents>(`/api/guests/${id}`),
+  agentQuery: (query: string, agentType: "guest-recovery" | "port-disruption" | "onboard-ops" | "general") =>
+    postJson<AgentQueryResponse>("/api/agent-query", { query, agentType }),
 };
 
 export function useLiveDashboardData() {

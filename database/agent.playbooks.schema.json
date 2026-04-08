@@ -1,0 +1,39 @@
+{
+  "$id": "voAgent.playbooks",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "playbookId",
+    "title",
+    "agentType",
+    "incidentType",
+    "severity",
+    "actionIds",
+    "active",
+    "createdAt",
+    "updatedAt",
+    "embedding"
+  ],
+  "properties": {
+    "playbookId": { "type": "string", "minLength": 1 },
+    "title": { "type": "string", "minLength": 1 },
+    "agentType": { "type": "string", "enum": ["guest-recovery"] },
+    "incidentType": { "type": "string" },
+    "severity": { "type": "string", "enum": ["critical", "high", "medium", "low"] },
+    "loyaltyTier": { "type": "string" },
+    "actionIds": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string" }
+    },
+    "active": { "type": "boolean" },
+    "embedding": {
+      "type": "array",
+      "minItems": 1536,
+      "maxItems": 1536,
+      "items": { "type": "number" }
+    },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "updatedAt": { "type": "string", "format": "date-time" }
+  }
+}

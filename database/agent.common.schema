@@ -1,0 +1,28 @@
+{
+  "$id": "voAgent.common",
+  "type": "object",
+  "definitions": {
+    "isoTimestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "statusProposal": {
+      "type": "string",
+      "enum": ["proposed", "queued_for_approval", "approved", "rejected", "executed", "cancelled"]
+    },
+    "statusRun": {
+      "type": "string",
+      "enum": ["started", "completed", "failed"]
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["critical", "high", "medium", "low"]
+    },
+    "vector1536": {
+      "type": "array",
+      "minItems": 1536,
+      "maxItems": 1536,
+      "items": { "type": "number" }
+    }
+  }
+}

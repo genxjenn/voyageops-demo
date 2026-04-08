@@ -23,6 +23,11 @@ interface AgentChatProps {
   onCommand?: (command: string) => void;
 }
 
+interface VectorQueryMeta {
+  retrievalMode?: string;
+  indexesUsed?: string[];
+}
+
 // ┌─────────────────────────────────────────────────────────────────────────────┐
 // │ COUCHBASE INTEGRATION: NLP Chat — Mock Response Engine                     │
 // │                                                                             │
@@ -313,6 +318,7 @@ export function AgentChat({ agentType = "general", className, onCommand }: Agent
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
+  const [vectorMeta, setVectorMeta] = useState<VectorQueryMeta | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const handleSendRef = useRef<(text?: string) => void>(() => {});
@@ -348,7 +354,7 @@ export function AgentChat({ agentType = "general", className, onCommand }: Agent
     }, 12);
   }, []);
 
-  const handleSend = useCallback((text?: string) => {
+  const handleSend = useCallback(async (text?: string) => {
     const messageText = text || input.trim();
     if (!messageText || isStreaming) return;
 
@@ -373,7 +379,20 @@ export function AgentChat({ agentType = "general", className, onCommand }: Agent
     setMessages(prev => [...prev, userMsg, assistantMsg]);
     setInput("");
 
-    const response = getAgentResponse(messageText, agentType, liveData);
+    let response = "";
+    if (agentType === "guest-recovery") {
+      try {
+        const vectorResult = await api.agentQuery(messageText, agentType);
+        response = vectorResult.response;
+        setVectorMeta(vectorResult.metadata ?? null);
+      } catch {
+        response = getAgentResponse(messageText, agentType, liveData);
+        setVectorMeta({ retrievalMode: "local-fallback", indexesUsed: [] });
+      }
+    } else {
+      response = getAgentResponse(messageText, agentType, liveData);
+    }
+
     setTimeout(() => simulateStreaming(response, assistantId), 400);
   }, [input, isStreaming, agentType, simulateStreaming, liveData, onCommand]);
 
@@ -412,6 +431,22 @@ export function AgentChat({ agentType = "general", className, onCommand }: Agent
           <p className="text-[10px] text-muted-foreground">
             Powered by Couchbase Capella AI Services • Natural Language Interface
           </p>
+          {agentType === "guest-recovery" && vectorMeta?.retrievalMode ? (
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px]">
+              <span className="rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 font-semibold text-primary">
+                Vector Mode: {vectorMeta.retrievalMode}
+              </span>
+              {vectorMeta.indexesUsed && vectorMeta.indexesUsed.length > 0 ? (
+                <span className="rounded-full border border-border bg-background px-2 py-0.5 text-muted-foreground">
+                  {vectorMeta.indexesUsed.length} index{vectorMeta.indexesUsed.length > 1 ? "es" : ""} active
+                </span>
+              ) : (
+                <span className="rounded-full border border-warning/40 bg-warning/10 px-2 py-0.5 text-warning">
+                  fallback active
+                </span>
+              )}
+            </div>
+          ) : null}
         </div>
         <div className="flex items-center gap-1.5">
           <span className="h-2 w-2 rounded-full bg-success animate-pulse" />

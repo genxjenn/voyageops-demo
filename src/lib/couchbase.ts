@@ -59,5 +59,23 @@ export const db = {
   },
   get shipInfo() {
     return this.bucket.scope('intelligence').collection('ship_info');
-  }
+  },
+  get agentRuns() {
+    return this.bucket.scope('agent').collection('agent_runs');
+  },
+  get actionProposals() {
+    return this.bucket.scope('agent').collection('action_proposals');
+  },
+  get actionExecutions() {
+    return this.bucket.scope('agent').collection('action_executions');
+  },
+  get actionCatalog() {
+    return this.bucket.scope('agent').collection('action_catalog');
+  },
+  get playbooks() {
+    return this.bucket.scope('agent').collection('playbooks');
+  },
+  get policyRules() {
+    return this.bucket.scope('agent').collection('policy_rules');
+  },
 };

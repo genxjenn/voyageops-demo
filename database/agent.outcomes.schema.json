@@ -1,0 +1,38 @@
+{
+  "$id": "voAgent.outcomes",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "outcomeId",
+    "executionId",
+    "guestId",
+    "incidentId",
+    "measuredAt",
+    "metrics",
+    "embedding"
+  ],
+  "properties": {
+    "outcomeId": { "type": "string", "minLength": 1 },
+    "executionId": { "type": "string", "minLength": 1 },
+    "guestId": { "type": "string", "minLength": 1 },
+    "incidentId": { "type": "string", "minLength": 1 },
+    "measuredAt": { "type": "string", "format": "date-time" },
+    "metrics": {
+      "type": "object",
+      "required": ["protectedValue", "riskBefore", "riskAfter"],
+      "properties": {
+        "protectedValue": { "type": "number" },
+        "riskBefore": { "type": "number" },
+        "riskAfter": { "type": "number" },
+        "csatDelta": { "type": "number" }
+      }
+    },
+    "notes": { "type": "string" },
+    "embedding": {
+      "type": "array",
+      "minItems": 1536,
+      "maxItems": 1536,
+      "items": { "type": "number" }
+    }
+  }
+}
