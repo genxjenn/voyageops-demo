@@ -170,31 +170,43 @@ CREATE PRIMARY INDEX ON voyageops.agent.action_catalog;
 CREATE PRIMARY INDEX ON voyageops.agent.playbooks;
 CREATE PRIMARY INDEX ON voyageops.agent.policy_rules;
 
--- Agent scope GSI indexes (queried by agent service)
-CREATE INDEX voAgent_action_proposals_status_createdAt 
-ON voyageops.agent.action_proposals(status, createdAt DESC);
-CREATE INDEX voAgent_action_executions_proposalId 
-ON voyageops.agent.action_executions(proposalId, updatedAt DESC);
-CREATE INDEX voAgent_outcomes_guest_incident 
-ON voyageops.agent.outcomes(guestId, incidentId, measuredAt DESC);
+## Vector Retrieval \u2014 Incidents
 
--- Agent scope Vector Indexes (for semantic retrieval)
-CREATE VECTOR INDEX voAgent_vector_action_catalog_embedding
-ON voyageops.agent.action_catalog(embedding VECTOR)
-WITH {"dimension": 1536, "similarity": "L2", "description": "IVF,SQ8"};
+The `POST /api/agent-query` endpoint provides semantic retrieval over `voyageops.guests.incidents`.
 
-CREATE VECTOR INDEX voAgent_vector_playbooks_embedding
-ON voyageops.agent.playbooks(embedding VECTOR)
-WITH {"dimension": 1536, "similarity": "L2", "description": "IVF,SQ8"};
+### Environment Variables
 
-CREATE VECTOR INDEX voAgent_vector_outcomes_embedding
-ON voyageops.agent.outcomes(embedding VECTOR)
-WITH {"dimension": 1536, "similarity": "L2", "description": "IVF,SQ8"};
-
--- Eventing metadata collection (do NOT index)
--- voyageops.eventing.sysdata is managed internally by Capella Eventing (no application index needed)
+```
+OPENAI_API_KEY=sk-...              # Required for embedding generation
+OPENAI_EMBED_MODEL=text-embedding-3-small  # Optional, defaults to text-embedding-3-small
+CB_VECTOR_INDEX_CATEGORY=          # Optional: override active index name for vector_category_incidents
+CB_VECTOR_INDEX_TYPE=              # Optional: override active index name for vector_type_incidents
+CB_VECTOR_INDEX_DESC=              # Optional: override active index name for vector_desc_incidents
 ```
 
+### Vector Indexes on Incidents (pre-existing in Capella)
+
+| Index Name | Field |
+|---|---|
+| `hyperscale_voGuestIncidentOpenAI_vector_category_incidents` | `vector_category_incidents` |
+| `hyperscale_voGuestIncidentOpenAI_vector_type_incidents` | `vector_type_incidents` |
+| `hyperscale_voGuestIncidentOpenAI_vector_desc_incidents` | `vector_desc_incidents` |
+
+All are SQL++ GSI-style vector indexes (not FTS). Access via `APPROX_VECTOR_DISTANCE`. Do not use `cluster.search()` SDK calls.
+
+### Retrieval Response
+
+```json
+{
+  "response": "Markdown formatted list of similar incidents",
+  "incidents": [...],
+  "metadata": {
+    "embeddingSource": "openai",
+    "retrievalMode": "vector-index",
+    "indexesAttempted": ["idx1", "idx2", "idx3"],
+    "indexesUsed": ["idx1", "idx2", "idx3"]
+  }
+}
 ---
 
 ## 5. Couchbase SDK Accessors (db object)
@@ -292,50 +304,10 @@ function OnDelete(meta, options) {
 
 **Testing:** Insert an incident with `status: "open"` via Capella Query Workbench, then query `voyageops.agent.agent_runs` to confirm a single `pending` document was created.
 
----
-
-## 7. Vector Retrieval \u2014 Incidents
-
-The `POST /api/agent-query` endpoint provides semantic retrieval over `voyageops.guests.incidents`.
-
-### Environment Variables
-
-```
-OPENAI_API_KEY=sk-...              # Required for embedding generation
-OPENAI_EMBED_MODEL=text-embedding-3-small  # Optional, defaults to text-embedding-3-small
-CB_VECTOR_INDEX_CATEGORY=          # Optional: override active index name for vector_category_incidents
-CB_VECTOR_INDEX_TYPE=              # Optional: override active index name for vector_type_incidents
-CB_VECTOR_INDEX_DESC=              # Optional: override active index name for vector_desc_incidents
-```
-
-### Vector Indexes on Incidents (pre-existing in Capella)
-
-| Index Name | Field |
-|---|---|
-| `hyperscale_voGuestIncidentOpenAI_vector_category_incidents` | `vector_category_incidents` |
-| `hyperscale_voGuestIncidentOpenAI_vector_type_incidents` | `vector_type_incidents` |
-| `hyperscale_voGuestIncidentOpenAI_vector_desc_incidents` | `vector_desc_incidents` |
-
-All are SQL++ GSI-style vector indexes (not FTS). Access via `APPROX_VECTOR_DISTANCE`. Do not use `cluster.search()` SDK calls.
-
-### Retrieval Response
-
-```json
-{
-  "response": "Markdown formatted list of similar incidents",
-  "incidents": [...],
-  "metadata": {
-    "embeddingSource": "openai",
-    "retrievalMode": "vector-index",
-    "indexesAttempted": ["idx1", "idx2", "idx3"],
-    "indexesUsed": ["idx1", "idx2", "idx3"]
-  }
-}
-```
 
 ---
 
-## 8. Agent Seed Data
+## 7. Agent Seed Data
 
 Before the agent service can generate quality proposals, run the seed script to populate the retrieval collections with embedded domain knowledge:
 
@@ -355,9 +327,32 @@ Requires `OPENAI_API_KEY` (or `OPENAI_KEY`) and all Couchbase connection env var
 
 The script is idempotent — runs `upsert` so re-running is safe.
 
----
+-- Agent scope GSI indexes (queried by agent service)
+CREATE INDEX voAgent_action_proposals_status_createdAt 
+ON voyageops.agent.action_proposals(status, createdAt DESC);
+CREATE INDEX voAgent_action_executions_proposalId 
+ON voyageops.agent.action_executions(proposalId, updatedAt DESC);
+CREATE INDEX voAgent_outcomes_guest_incident 
+ON voyageops.agent.outcomes(guestId, incidentId, measuredAt DESC);
 
-## 9. Integration Points by File
+-- Agent scope Vector Indexes (for semantic retrieval)
+CREATE VECTOR INDEX voAgent_vector_action_catalog_embedding
+ON voyageops.agent.action_catalog(embedding VECTOR)
+WITH {"dimension": 1536, "similarity": "L2", "description": "IVF,SQ8"};
+
+CREATE VECTOR INDEX voAgent_vector_playbooks_embedding
+ON voyageops.agent.playbooks(embedding VECTOR)
+WITH {"dimension": 1536, "similarity": "L2", "description": "IVF,SQ8"};
+
+CREATE VECTOR INDEX voAgent_vector_outcomes_embedding
+ON voyageops.agent.outcomes(embedding VECTOR)
+WITH {"dimension": 1536, "similarity": "L2", "description": "IVF,SQ8"};
+
+-- Eventing metadata collection (do NOT index)
+-- voyageops.eventing.sysdata is managed internally by Capella Eventing (no application index needed)
+
+
+## 8. Integration Points by File
 
 ### `src/data/mockData.ts` — Data Layer
 | Mock Export | Couchbase Collection | Query Pattern |
@@ -447,7 +442,7 @@ CB_VECTOR_INDEX_DESC=        # Optional: override default index name
 
 ---
 
-## 10. Migration Steps
+## 9. Migration Steps
 
 ### Phase 1 — Infrastructure Setup
 
@@ -508,7 +503,7 @@ const { data: venues, isLoading } = useQuery({
 
 ---
 
-## 11. Query Reference
+## 10. Query Reference
 
 ### Dashboard KPIs (Analytics/Aggregation)
 ```sql
@@ -561,7 +556,7 @@ ORDER BY occupancyPct DESC;
 
 ---
 
-## 12. AI & NLP Integration
+## 11. AI & NLP Integration
 
 > **Status:** Data infrastructure complete. RAG pipeline not yet implemented.
 
@@ -618,7 +613,7 @@ User Query
 
 ---
 
-## 13. Real-Time Features
+## 12. Real-Time Features
 
 ### Eventing Service (Server & Capella)
 
@@ -663,7 +658,7 @@ await collection.mutateIn('venue::le-bordeaux', [
 
 ---
 
-## 14. Security & Connection Management
+## 13. Security & Connection Management
 
 ### Credential Storage
 - Store all Couchbase credentials as Edge Function secrets (never in frontend code)
