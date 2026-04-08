@@ -1,8 +1,8 @@
 # VoyageOps AI — Architecture & Design Specification
 
-> **Version:** 1.0 · **Last Updated:** March 2026  
+> **Version:** 1.1 · **Last Updated:** March 2026  
 > **Platform:** Acme Cruise Line · MS Acme Voyager  
-> **Status:** MVP (Phase 1 — Mock Data) with production architecture defined
+> **Status:** MVP (Phase 1 mock data for Port & Excusion AND Onboard Ops, Phase 2 — Couchbase cluster Data for Guests & Incident Initiation ) with production architecture defined.
 
 ---
 
@@ -13,16 +13,18 @@
 3. [Application Architecture](#3-application-architecture)
 4. [Agent System Design](#4-agent-system-design)
 5. [Data Model & Schema](#5-data-model--schema)
-6. [Component Architecture](#6-component-architecture)
-7. [Design System](#7-design-system)
-8. [Routing & Navigation](#8-routing--navigation)
-9. [State Management](#9-state-management)
-10. [Chat & NLP Interface](#10-chat--nlp-interface)
-11. [Guided Demo System](#11-guided-demo-system)
-12. [Production Roadmap](#12-production-roadmap)
-13. [Deployment & Infrastructure](#13-deployment--infrastructure)
-14. [Security Considerations](#14-security-considerations)
-15. [Appendix: File Inventory](#15-appendix-file-inventory)
+6. [Agent Runtime & Eventing](#6-agent-runtime--eventing)
+7. [Vector Retrieval Pipeline](#7-vector-retrieval-pipeline)
+8. [Component Architecture](#8-component-architecture)
+9. [Design System](#9-design-system)
+10. [Routing & Navigation](#10-routing--navigation)
+11. [State Management](#11-state-management)
+12. [Chat & NLP Interface](#12-chat--nlp-interface)
+13. [Guided Demo System](#13-guided-demo-system)
+14. [Production Roadmap](#14-production-roadmap)
+15. [Deployment & Infrastructure](#15-deployment--infrastructure)
+16. [Security Considerations](#16-security-considerations)
+17. [Appendix: File Inventory](#17-appendix-file-inventory)
 
 ---
 
@@ -110,12 +112,32 @@ VoyageOps AI is an AI-powered operational intelligence platform for cruise line 
 
 ---
 
-## 3. Application Architecture
+## 3. Application Architecture (Phase 1 → Phase 2 Transition)
 
-### Entry Point
+### Data Model Evolution
+
+**Phase 1 (MVP — Current):** Mock data in `src/data/mockData.ts`
+
+**Phase 2 (Active):** Live Couchbase backend with agent lifecycle management
+
+The frontend remains unchanged — all fetch calls route through `/api/*` proxy to backend routes.
+
+### Entry Point & Component Tree
 
 ```
 index.html → src/main.tsx → App.tsx → BrowserRouter → AppLayout → Routes
+```
+
+Frontend initialization:
+1. React Query wraps all async operations (ready for remote API)
+2. BrowserRouter establishes SPA routing
+3. AppLayout provides persistent sidebar navigation
+4. Each page component (Dashboard, GuestRecoveryAgent, etc.) dispatches API calls
+
+### Backend Entry Point
+
+```
+npm run dev → Vite (port 5173) → /api/* proxy → src/api/server.ts → Express routes → Couchbase SDK
 ```
 
 ### App.tsx — Root Component
@@ -180,14 +202,31 @@ Each agent follows an identical structural pattern:
 └─────────────────────────────────────────────────┘
 ```
 
-### Guest Recovery Agent (`/guest-recovery`)
+### Guest Recovery Agent (`/guest-recovery`) — Live Vector Retrieval
 
 **Context Panel:**
 - Guest profile card (name, loyalty tier, cabin, booking, spend, sailing history, notes)
 - Active incident card (ID, severity badge, status badge, timestamps)
 - All incidents list with severity/status badges
 
-**Unique data points:** Lifetime value estimation, churn risk percentage, first-complaint-ever flag
+**AI Chat Interface (AgentChat):**
+- User query → `POST /api/agent-query` with OpenAI embedding
+- Backend performs SQL++ `APPROX_VECTOR_DISTANCE` search across 3 vector indexes
+- Returns ranked incidents + metadata (retrieval mode, indexes used, embedding source)
+- Chat badge shows: 
+  - **Vector Mode** (blue) = indexes active
+  - **Indexes active** (gray) = count of live GSI vector indexes
+  - **Fallback active** (warning) = in-memory cosine similarity fallback
+
+**Agent data model (production):**
+- Query triggers Capella Eventing OnUpdate → writes pending run to `agent_runs`
+- Backend worker polls pending runs
+- Retrieves semantically-matched actions + playbooks from vector indexes
+- Assembles context, calls LLM (GPT-4/Claude via OpenAI API)
+- Writes proposal to `action_proposals` → approval queue
+- On approval, writes execution + outcomes for analytics
+
+**Unique data points:** Lifetime value, churn risk, first-complaint flag, policy constraints
 
 ### Port & Excursion Disruption Agent (`/port-disruption`)
 
@@ -296,7 +335,107 @@ All data is defined in `src/data/mockData.ts` as TypeScript interfaces with mock
 
 ---
 
-## 6. Component Architecture
+## 6. Agent Runtime & Eventing
+
+### Capella Eventing Trigger (OnUpdate Handler)
+
+When a new incident is inserted or its status transitions to `open`:
+
+1. **Source:** `voyageops.guests.incidents` collection (any document update)
+2. **OnUpdate Handler:** Evaluates eligibility conditions
+   - Gate: `doc.status === "open"` (only open incidents)
+   - Idempotency: `doc.openVersion` versioning (re-saves of same version create zero new runs)
+   - Deterministic key: `agent_runs::guest-recovery::{incidentId}::v{openVersion}`
+3. **Destination Binding (dst):** `voyageops.agent.agent_runs` collection
+4. **Metadata Collection:** `voyageops.eventing.sysdata` (internal Capella state)
+
+### Agent Run Lifecycle
+
+```
+Incident created (status=open)
+     ↓
+  Eventing OnUpdate fires                               ← IMPLEMENTED
+     ↓
+  New pending agent_run created                         ← IMPLEMENTED
+     ↓
+  Backend worker polls agent_runs WHERE status="pending"← NOT YET IMPLEMENTED
+     ↓
+  Vector retrieval: actions + playbooks + policies      ← DATA READY (indexes + seed data)
+     ↓
+  LLM prompt assembly + chat/completions call           ← NOT YET IMPLEMENTED
+     ↓
+  Agent generates action_proposal (pending approval)    ← NOT YET IMPLEMENTED
+     ↓
+  Human approves → action_execution created             ← NOT YET IMPLEMENTED
+     ↓
+  Outcomes measured and recorded                        ← NOT YET IMPLEMENTED
+```
+
+### Collections in Agent Scope
+
+| Collection | Purpose | Vector Index |
+|---|---|---|
+| `agent_runs` | Tracks each agent invocation | NO |
+| `action_proposals` | Pending agent recommendations | NO |
+| `action_executions` | Approved + executed actions | NO |
+| `action_catalog` | Lookup library of recovery actions | **YES** (embedding) |
+| `playbooks` | Workflow templates combining actions | **YES** (embedding) |
+| `policy_rules` | Constraints & guardrails | NO |
+
+---
+
+## 7. Vector Retrieval Pipeline
+
+### Embedded Data Seeding
+
+Before agent runs can generate quality proposals, seed the retrieval collections:
+
+```bash
+npm run seed:agent
+```
+
+**Populates:**
+- **action_catalog** (10 actions with OpenAI embeddings)
+- **playbooks** (6 playbooks with embeddings)
+- **policy_rules** (6 policy documents for constraints)
+
+Embeddings use OpenAI `text-embedding-3-small` (1536 dims, L2 similarity).
+
+### Vector Index Structure
+
+Three SQL++ GSI vector indexes on the agent scope:
+
+```sql
+CREATE VECTOR INDEX voAgent_vector_action_catalog_embedding
+ON voyageops.agent.action_catalog(embedding VECTOR);
+
+CREATE VECTOR INDEX voAgent_vector_playbooks_embedding
+ON voyageops.agent.playbooks(embedding VECTOR);
+
+CREATE VECTOR INDEX voAgent_vector_outcomes_embedding
+ON voyageops.agent.outcomes(embedding VECTOR);
+```
+
+All configured with: 1536 dimensions, L2 similarity, IVF,SQ8 description.
+
+### Retrieval Flow (POST /api/agent-query)
+
+1. **Embedding:** OpenAI or corpus fallback (token-overlap cosine similarity)
+2. **SQL++ Search:** `APPROX_VECTOR_DISTANCE` across 3 collections in parallel
+3. **Deduplication:** Aggregates results by docId, de-duplicates across indexes
+4. **Fallback:** In-memory cosine similarity if indexes unavailable
+5. **Metadata:** Returns retrieval mode, indexes used, embedding source
+
+### Chat UI Integration
+
+AgentChat displays retrieval status:
+- **Vector Mode** badge (blue) = indexes active
+- **3 indexes active** = count of live GSI vectors
+- **Fallback active** warning = using in-memory similarity
+
+---
+
+## 8. Component Architecture
 
 ### Component Hierarchy
 
@@ -364,7 +503,7 @@ App
 
 ---
 
-## 7. Design System
+## 9. Design System
 
 ### Color Tokens (HSL)
 
@@ -447,7 +586,7 @@ The `StatusBadge` component maps 18 status types to consistent color treatments:
 
 ---
 
-## 8. Routing & Navigation
+## 10. Routing & Navigation
 
 ### Route Table
 
@@ -478,7 +617,7 @@ Active state: `bg-primary/10 text-primary`
 
 ---
 
-## 9. State Management
+## 11. State Management
 
 ### Strategy: Local Component State
 
@@ -509,7 +648,7 @@ This decoupled pattern avoids prop drilling and works across the component tree.
 
 ---
 
-## 10. Chat & NLP Interface
+## 12. Chat & NLP Interface
 
 ### AgentChat Architecture
 
@@ -566,7 +705,7 @@ Responses are revealed character-by-character at 3 chars per 12ms interval (~250
 
 ---
 
-## 11. Guided Demo System
+## 13. Guided Demo System
 
 ### 4-Step Walkthrough
 
@@ -593,7 +732,7 @@ Responses are revealed character-by-character at 3 chars per 12ms interval (~250
 
 ---
 
-## 12. Production Roadmap
+## 14. Production Roadmap
 
 ### Phase 1 (Current) — MVP Demo
 
@@ -638,7 +777,7 @@ Responses are revealed character-by-character at 3 chars per 12ms interval (~250
 
 ---
 
-## 13. Deployment & Infrastructure
+## 15. Deployment & Infrastructure
 
 ### Current (MVP)
 
@@ -673,7 +812,7 @@ Responses are revealed character-by-character at 3 chars per 12ms interval (~250
 
 ---
 
-## 14. Security Considerations
+## 16. Security Considerations
 
 ### Current (MVP)
 
@@ -696,7 +835,7 @@ Responses are revealed character-by-character at 3 chars per 12ms interval (~250
 
 ---
 
-## 15. Appendix: File Inventory
+## 17. Appendix: File Inventory
 
 ### Pages (5 files)
 
