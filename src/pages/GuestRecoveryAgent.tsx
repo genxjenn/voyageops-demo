@@ -72,6 +72,23 @@ function getSeverityRisk(severity: string | undefined) {
   }
 }
 
+function getSeverityPriority(severity: string | undefined) {
+  const order: Record<string, number> = {
+    critical: 6,
+    high: 5,
+    mediumhigh: 4,
+    medium: 3,
+    mediumlow: 2,
+    low: 1,
+  };
+
+  const normalized = String(severity || "")
+    .toLowerCase()
+    .replace(/[^a-z]/g, "");
+
+  return order[normalized] ?? 0;
+}
+
 // ┌─────────────────────────────────────────────────────────────────────────────┐
 // │ COUCHBASE INTEGRATION: Guest Recovery Agent Data                           │
 // │                                                                             │
@@ -113,9 +130,18 @@ const GuestRecoveryAgent = () => {
   const incidents = incidentsQuery.data ?? (hasLiveGuests ? [] : mockIncidents);
   const allIncidents = allIncidentsQuery.data ?? incidentsQuery.data ?? (hasLiveGuests ? [] : mockIncidents);
   const venues = venuesQuery.data ?? [];
-  const openIncidents = incidents.filter(inc => inc.status !== "closed");
+  const nonClosedIncidents = incidents.filter(inc => String(inc.status).toLowerCase() !== "closed");
   const closedIncidents = incidents.filter(inc => inc.status === "closed");
-  const incident = openIncidents[0] ?? incidents[0];
+  const incident = nonClosedIncidents
+    .slice()
+    .sort((a, b) => {
+      const severityDelta = getSeverityPriority(b.severity) - getSeverityPriority(a.severity);
+      if (severityDelta !== 0) return severityDelta;
+
+      const updatedA = parseTimestamp(a.updatedAt).getTime();
+      const updatedB = parseTimestamp(b.updatedAt).getTime();
+      return updatedB - updatedA;
+    })[0] ?? incidents[0];
 
   const severityWeight: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
   const statusWeight: Record<string, number> = { open: 1.2, reviewing: 1.1, approved: 1.0, executed: 0.8, closed: 0.2 };
@@ -334,7 +360,7 @@ const GuestRecoveryAgent = () => {
               <div className="flex gap-4 text-xs">
                 <div className="text-right">
                   <span className="text-muted-foreground block">Open</span>
-                  <span className="font-semibold text-foreground">{openIncidents.length}</span>
+                  <span className="font-semibold text-foreground">{nonClosedIncidents.length}</span>
                 </div>
                 <div className="text-right">
                   <span className="text-muted-foreground block">Closed</span>
@@ -343,7 +369,14 @@ const GuestRecoveryAgent = () => {
               </div>
             </div>
             <div className="space-y-2">
-              {incidents.map(inc => (
+              {incidents.slice().sort((a, b) => {
+                const aIsOpen = String(a.status).toLowerCase() !== "closed" ? 1 : 0;
+                const bIsOpen = String(b.status).toLowerCase() !== "closed" ? 1 : 0;
+                if (bIsOpen !== aIsOpen) return bIsOpen - aIsOpen;
+                const severityDelta = getSeverityPriority(b.severity) - getSeverityPriority(a.severity);
+                if (severityDelta !== 0) return severityDelta;
+                return parseTimestamp(b.updatedAt).getTime() - parseTimestamp(a.updatedAt).getTime();
+              }).map(inc => (
                 <div key={getIncidentIdentifier(inc)} className="flex items-center justify-between gap-2 rounded bg-muted p-2 text-xs">
                   <div className="min-w-0">
                     <div className="flex items-center gap-1.5">
