@@ -108,9 +108,9 @@ function cosineSimilarity(a: number[], b: number[]) {
 }
 
 async function getQueryEmbedding(query: string) {
-  const apiKey = process.env.OPENAI_API_KEY || process.env.OPENAI_KEY;
+  const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    throw new Error('OPENAI_API_KEY (or OPENAI_KEY) is missing');
+    throw new Error('OPENAI_API_KEY is missing');
   }
 
   const response = await fetch('https://api.openai.com/v1/embeddings', {

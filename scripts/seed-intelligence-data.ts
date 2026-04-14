@@ -9,6 +9,58 @@ import {
   shipInfo,
 } from '../src/data/mockData.ts';
 
+const OPENAI_EMBED_MODEL = process.env.OPENAI_EMBED_MODEL || 'text-embedding-3-small';
+
+async function getEmbedding(text: string): Promise<number[]> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error('OPENAI_API_KEY environment variable is missing');
+  }
+
+  const response = await fetch('https://api.openai.com/v1/embeddings', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      input: text,
+      model: OPENAI_EMBED_MODEL,
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Embedding API failed: ${response.status} ${body}`);
+  }
+
+  const payload = await response.json();
+  const embedding = payload?.data?.[0]?.embedding;
+  if (!Array.isArray(embedding)) {
+    throw new Error('Embedding API returned an invalid vector');
+  }
+
+  return embedding as number[];
+}
+
+function buildRecommendationEmbeddingText(rec: (typeof agentRecommendations)[number]): string {
+  return [
+    `title: ${rec.title}`,
+    `summary: ${rec.summary}`,
+    `reasoning: ${rec.reasoning}`,
+    `agentType: ${rec.agentType}`,
+  ].join(' | ');
+}
+
+function buildTimelineEmbeddingText(event: (typeof guestRecoveryTimeline)[number]): string {
+  return [
+    `title: ${event.title}`,
+    `description: ${event.description}`,
+    `type: ${event.type}`,
+    `actor: ${event.actor}`,
+  ].join(' | ');
+}
+
 function toRecommendationDoc(recommendation: (typeof agentRecommendations)[number]) {
   return {
     ...recommendation,
@@ -42,8 +94,12 @@ async function seedRecommendations() {
   let count = 0;
 
   for (const recommendation of agentRecommendations) {
+    const embedding = await getEmbedding(buildRecommendationEmbeddingText(recommendation));
     const key = `recommendation::${recommendation.id}`;
-    await db.recommendations.upsert(key, toRecommendationDoc(recommendation));
+    await db.recommendations.upsert(key, {
+      ...toRecommendationDoc(recommendation),
+      embedding,
+    });
     count += 1;
     console.log(`Seeded recommendations ${count}/${agentRecommendations.length}: ${recommendation.id}`);
   }
@@ -62,8 +118,12 @@ async function seedTimelineEvents() {
 
   for (const timeline of timelines) {
     for (const event of timeline.events) {
+      const embedding = await getEmbedding(buildTimelineEmbeddingText(event));
       const key = `timeline::${timeline.agentType}::${event.id}`;
-      await db.timeline.upsert(key, toTimelineDoc(timeline.agentType, event));
+      await db.timeline.upsert(key, {
+        ...toTimelineDoc(timeline.agentType, event),
+        embedding,
+      });
       count += 1;
       console.log(`Seeded timeline ${count}: ${timeline.agentType} ${event.id}`);
     }

@@ -3,17 +3,6 @@ import { initCouchbase, db } from '../src/lib/couchbase.ts';
 
 type AgentType = 'guest-recovery';
 
-type ActionCatalogSeed = {
-  actionId: string;
-  label: string;
-  description: string;
-  agentType: AgentType;
-  incidentType: string;
-  incidentCategory: string;
-  loyaltyTier: 'any' | 'silver' | 'gold' | 'platinum';
-  active: boolean;
-};
-
 type PlaybookSeed = {
   playbookId: string;
   title: string;
@@ -21,7 +10,7 @@ type PlaybookSeed = {
   agentType: AgentType;
   incidentType: string;
   severity: 'low' | 'medium' | 'high' | 'critical';
-  loyaltyTier: 'any' | 'silver' | 'gold' | 'platinum';
+  loyaltyTier: string | string[];
   actionIds: string[];
   active: boolean;
 };
@@ -39,109 +28,6 @@ type PolicyRuleSeed = {
 };
 
 const OPENAI_EMBED_MODEL = process.env.OPENAI_EMBED_MODEL || 'text-embedding-3-small';
-
-const actionCatalogSeeds: ActionCatalogSeed[] = [
-  {
-    actionId: 'gr_dining_priority_rebook',
-    label: 'Priority dining rebook',
-    description: 'Move guest to earliest premium dining slot and remove queue friction.',
-    agentType: 'guest-recovery',
-    incidentType: 'service-delay',
-    incidentCategory: 'dining',
-    loyaltyTier: 'any',
-    active: true,
-  },
-  {
-    actionId: 'gr_complimentary_specialty_dining',
-    label: 'Complimentary specialty dining',
-    description: 'Offer one complimentary specialty dining reservation within 24 hours.',
-    agentType: 'guest-recovery',
-    incidentType: 'service-delay',
-    incidentCategory: 'dining',
-    loyaltyTier: 'gold',
-    active: true,
-  },
-  {
-    actionId: 'gr_luggage_priority_search',
-    label: 'Priority luggage search',
-    description: 'Trigger cross-deck lost-item search with 30-minute SLA updates.',
-    agentType: 'guest-recovery',
-    incidentType: 'lost-item',
-    incidentCategory: 'luggage',
-    loyaltyTier: 'any',
-    active: true,
-  },
-  {
-    actionId: 'gr_bridge_followup_call',
-    label: 'Bridge follow-up call',
-    description: 'Senior crew member calls guest with personalized recovery summary.',
-    agentType: 'guest-recovery',
-    incidentType: 'service-escalation',
-    incidentCategory: 'guest-relations',
-    loyaltyTier: 'platinum',
-    active: true,
-  },
-  {
-    actionId: 'gr_spa_credit_50',
-    label: '$50 spa credit',
-    description: 'Issue a goodwill spa credit with same-day redeemability.',
-    agentType: 'guest-recovery',
-    incidentType: 'amenity-failure',
-    incidentCategory: 'hospitality',
-    loyaltyTier: 'silver',
-    active: true,
-  },
-  {
-    actionId: 'gr_cabin_amenity_refresh',
-    label: 'Cabin amenity refresh',
-    description: 'Deliver amenities package and concierge note to cabin.',
-    agentType: 'guest-recovery',
-    incidentType: 'housekeeping-gap',
-    incidentCategory: 'cabin',
-    loyaltyTier: 'any',
-    active: true,
-  },
-  {
-    actionId: 'gr_internet_day_pass',
-    label: 'One-day internet pass',
-    description: 'Provide one-day premium internet pass as low-friction apology.',
-    agentType: 'guest-recovery',
-    incidentType: 'service-delay',
-    incidentCategory: 'hospitality',
-    loyaltyTier: 'any',
-    active: true,
-  },
-  {
-    actionId: 'gr_excursion_partial_refund',
-    label: 'Partial excursion refund',
-    description: 'Apply partial refund for disrupted or shortened excursion.',
-    agentType: 'guest-recovery',
-    incidentType: 'excursion-disruption',
-    incidentCategory: 'excursions',
-    loyaltyTier: 'any',
-    active: true,
-  },
-  {
-    actionId: 'gr_children_activity_voucher',
-    label: 'Children activity voucher',
-    description: 'Offer family-focused onboard activity voucher to recover schedule impact.',
-    agentType: 'guest-recovery',
-    incidentType: 'family-disruption',
-    incidentCategory: 'family-experience',
-    loyaltyTier: 'any',
-    active: true,
-  },
-  {
-    actionId: 'gr_executive_lounge_access',
-    label: 'Executive lounge access',
-    description: 'Grant temporary lounge access for premium guest recovery.',
-    agentType: 'guest-recovery',
-    incidentType: 'service-escalation',
-    incidentCategory: 'guest-relations',
-    loyaltyTier: 'platinum',
-    active: true,
-  },
-];
 
 const playbookSeeds: PlaybookSeed[] = [
   {
@@ -208,6 +94,108 @@ const playbookSeeds: PlaybookSeed[] = [
     severity: 'critical',
     loyaltyTier: 'platinum',
     actionIds: ['gr_bridge_followup_call', 'gr_executive_lounge_access', 'gr_complimentary_specialty_dining'],
+    active: true,
+  },
+  // ── Top-5 incident coverage: dining complaint ─────────────────────────────
+  {
+    playbookId: 'pb_gr_dining_complaint_vip',
+    title: 'Critical dining complaint — VIP recovery',
+    description:
+      'Immediate premium service recovery for DIAMOND and ELITE PLATINUM guests with critical dining service failures, including personal chef experiences, onboard credit, and future cruise compensation.',
+    agentType: 'guest-recovery',
+    incidentType: 'dining complaint',
+    severity: 'critical',
+    loyaltyTier: ['diamond', 'elite platinum'],
+    actionIds: [
+      'gr_gourmet_dining_package_vip',
+      'gr_private_dining_event_vip',
+      'gr_chef_table_reservation_vip',
+      'gr_onboard_credit_premium_vip',
+      'gr_future_cruise_credit_vip',
+      'gr_specialty_beverage_credit_vip',
+    ],
+    active: true,
+  },
+  {
+    playbookId: 'pb_gr_dining_complaint_std',
+    title: 'Dining complaint standard recovery',
+    description:
+      'Service recovery for dining failures and complaints across all guest tiers, prioritizing prompt rebooking, complimentary dining, and a follow-up call.',
+    agentType: 'guest-recovery',
+    incidentType: 'dining complaint',
+    severity: 'high',
+    loyaltyTier: 'any',
+    actionIds: [
+      'gr_dining_priority_rebook',
+      'gr_priority_dining_reservation_std',
+      'gr_complimentary_specialty_dining',
+      'gr_meal_plan_extension_std',
+      'gr_onboard_credit_premium_std',
+      'gr_bridge_followup_call',
+      'gr_specialty_dessert_credit_std',
+    ],
+    active: true,
+  },
+  // ── Top-5 incident coverage: maint-failure ───────────────────────────────
+  {
+    playbookId: 'pb_gr_maint_failure_vip',
+    title: 'Critical cabin failure — VIP recovery',
+    description:
+      'Urgent relocation and premium compensation for DIAMOND and ELITE PLATINUM guests affected by critical cabin mechanical or system failures such as HVAC, plumbing, or electrical outages.',
+    agentType: 'guest-recovery',
+    incidentType: 'maint-failure',
+    severity: 'critical',
+    loyaltyTier: ['diamond', 'elite platinum'],
+    actionIds: [
+      'gr_room_suite_upgrade_comp',
+      'gr_suite_upgrade_ultra_vip',
+      'gr_priority_cabin_services_vip',
+      'gr_concierge_priority_vip',
+      'gr_onboard_credit_premium_vip',
+      'gr_future_cruise_credit_vip',
+      'gr_cabin_upgrade_coupon_vip',
+    ],
+    active: true,
+  },
+  // ── Top-5 incident coverage: excursion-disruption (VIP) ──────────────────
+  {
+    playbookId: 'pb_gr_excursion_disruption_vip',
+    title: 'Excursion disruption — VIP recovery',
+    description:
+      'Elevated shore excursion recovery with premium rebooking, priority tender access, and future cruise compensation for DIAMOND, ELITE PLATINUM, and EMERALD loyalty guests.',
+    agentType: 'guest-recovery',
+    incidentType: 'excursion-disruption',
+    severity: 'high',
+    loyaltyTier: ['diamond', 'elite platinum', 'emerald'],
+    actionIds: [
+      'gr_excursion_partial_refund',
+      'gr_shore_excursion_premium_vip',
+      'gr_priority_shore_excursion_vip',
+      'gr_priority_tender_service_vip',
+      'gr_onboard_credit_premium_vip',
+      'gr_future_cruise_credit_vip',
+      'gr_airfare_credit_vip',
+    ],
+    active: true,
+  },
+  // ── Top-5 incident coverage: lost-item (VIP) ────────────────────────────
+  {
+    playbookId: 'pb_gr_lost_item_vip',
+    title: 'Lost item — VIP fast-track recovery',
+    description:
+      'Expedited lost luggage and valuables recovery with dedicated concierge support, temporary comfort upgrade, and premium onboard and future cruise compensation for VIP guests.',
+    agentType: 'guest-recovery',
+    incidentType: 'lost-item',
+    severity: 'high',
+    loyaltyTier: ['diamond', 'elite platinum', 'emerald'],
+    actionIds: [
+      'gr_luggage_priority_search',
+      'gr_room_suite_upgrade_comp',
+      'gr_concierge_priority_vip',
+      'gr_onboard_credit_premium_vip',
+      'gr_future_cruise_credit_vip',
+      'gr_specialty_service_credit_vip',
+    ],
     active: true,
   },
 ];
@@ -282,9 +270,9 @@ const policyRuleSeeds: PolicyRuleSeed[] = [
 ];
 
 async function getEmbedding(text: string): Promise<number[]> {
-  const apiKey = process.env.OPENAI_API_KEY || process.env.OPENAI_KEY;
+  const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    throw new Error('OPENAI_API_KEY (or OPENAI_KEY) is missing');
+    throw new Error('OPENAI_API_KEY is missing');
   }
 
   const response = await fetch('https://api.openai.com/v1/embeddings', {
@@ -313,14 +301,12 @@ async function getEmbedding(text: string): Promise<number[]> {
   return embedding as number[];
 }
 
-function buildActionEmbeddingText(action: ActionCatalogSeed) {
+function buildPolicyRuleEmbeddingText(rule: PolicyRuleSeed) {
   return [
-    `actionId: ${action.actionId}`,
-    `label: ${action.label}`,
-    `description: ${action.description}`,
-    `incidentType: ${action.incidentType}`,
-    `incidentCategory: ${action.incidentCategory}`,
-    `loyaltyTier: ${action.loyaltyTier}`,
+    `name: ${rule.name}`,
+    `incidentType: ${rule.incidentType}`,
+    `severity: ${rule.severity}`,
+    `agentType: ${rule.agentType}`,
   ].join(' | ');
 }
 
@@ -352,29 +338,6 @@ async function seedPolicyRules() {
   return policyRuleSeeds.length;
 }
 
-async function seedActionCatalog() {
-  const actionCatalog = db.bucket.scope('agent').collection('action_catalog');
-  const now = new Date().toISOString();
-
-  let count = 0;
-  for (const action of actionCatalogSeeds) {
-    const embedding = await getEmbedding(buildActionEmbeddingText(action));
-    const key = `action_catalog::${action.actionId}`;
-
-    await actionCatalog.upsert(key, {
-      ...action,
-      embedding,
-      createdAt: now,
-      updatedAt: now,
-    });
-
-    count += 1;
-    console.log(`Seeded action_catalog ${count}/${actionCatalogSeeds.length}: ${action.actionId}`);
-  }
-
-  return count;
-}
-
 async function seedPlaybooks() {
   const playbooks = db.bucket.scope('agent').collection('playbooks');
   const now = new Date().toISOString();
@@ -403,12 +366,10 @@ async function main() {
 
   console.log('Seeding voyageops.agent collections...');
   const policyRulesCount = await seedPolicyRules();
-  const actionCatalogCount = await seedActionCatalog();
   const playbooksCount = await seedPlaybooks();
 
   console.log('Seeding complete.');
   console.log(`policy_rules: ${policyRulesCount}`);
-  console.log(`action_catalog: ${actionCatalogCount}`);
   console.log(`playbooks: ${playbooksCount}`);
 }
 
