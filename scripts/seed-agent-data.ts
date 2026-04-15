@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { initCouchbase, db } from '../src/lib/couchbase.ts';
+import { DocumentNotFoundError } from 'couchbase';
 
 type AgentType = 'guest-recovery';
 
@@ -113,6 +114,10 @@ const playbookSeeds: PlaybookSeed[] = [
       'gr_onboard_credit_premium_vip',
       'gr_future_cruise_credit_vip',
       'gr_specialty_beverage_credit_vip',
+      // Fallback options when vector search routes a non-VIP guest here.
+      'gr_priority_dining_reservation_std',
+      'gr_meal_plan_extension_std',
+      'gr_onboard_credit_premium_std',
     ],
     active: true,
   },
@@ -301,6 +306,29 @@ async function getEmbedding(text: string): Promise<number[]> {
   return embedding as number[];
 }
 
+async function getEmbeddingWithRetry(text: string, maxAttempts = 4): Promise<number[]> {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await getEmbedding(text);
+    } catch (error) {
+      lastError = error;
+      if (attempt === maxAttempts) {
+        break;
+      }
+
+      const backoffMs = 500 * 2 ** (attempt - 1);
+      console.warn(`Embedding attempt ${attempt}/${maxAttempts} failed. Retrying in ${backoffMs}ms...`);
+      await new Promise((resolve) => setTimeout(resolve, backoffMs));
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error('Embedding generation failed after retries');
+}
+
 function buildPolicyRuleEmbeddingText(rule: PolicyRuleSeed) {
   return [
     `name: ${rule.name}`,
@@ -322,15 +350,54 @@ function buildPlaybookEmbeddingText(playbook: PlaybookSeed) {
   ].join(' | ');
 }
 
+async function getExistingCreatedAt(collection: ReturnType<typeof db.bucket.scope>['collection'], key: string): Promise<string | undefined> {
+  try {
+    const existing = await collection.get(key);
+    const doc = existing.content as { createdAt?: unknown };
+    return typeof doc.createdAt === 'string' ? doc.createdAt : undefined;
+  } catch (error) {
+    if (error instanceof DocumentNotFoundError) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+async function validatePlaybookActionIds() {
+  const actionCatalog = db.bucket.scope('agent').collection('action_catalog');
+  const allActionIds = Array.from(new Set(playbookSeeds.flatMap((playbook) => playbook.actionIds)));
+  const missing: string[] = [];
+
+  for (const actionId of allActionIds) {
+    const key = `action_catalog::${actionId}`;
+    try {
+      await actionCatalog.get(key);
+    } catch (error) {
+      if (error instanceof DocumentNotFoundError) {
+        missing.push(actionId);
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  if (missing.length > 0) {
+    throw new Error(
+      `Playbook seed validation failed. ${missing.length} actionId(s) not found in action_catalog: ${missing.join(', ')}`,
+    );
+  }
+}
+
 async function seedPolicyRules() {
   const policyRules = db.bucket.scope('agent').collection('policy_rules');
   const now = new Date().toISOString();
 
   for (const rule of policyRuleSeeds) {
     const key = `policy_rules::${rule.ruleId}`;
+    const createdAt = (await getExistingCreatedAt(policyRules, key)) ?? now;
     await policyRules.upsert(key, {
       ...rule,
-      createdAt: now,
+      createdAt,
       updatedAt: now,
     });
   }
@@ -344,13 +411,14 @@ async function seedPlaybooks() {
 
   let count = 0;
   for (const playbook of playbookSeeds) {
-    const embedding = await getEmbedding(buildPlaybookEmbeddingText(playbook));
+    const embedding = await getEmbeddingWithRetry(buildPlaybookEmbeddingText(playbook));
     const key = `playbooks::${playbook.playbookId}`;
+    const createdAt = (await getExistingCreatedAt(playbooks, key)) ?? now;
 
     await playbooks.upsert(key, {
       ...playbook,
       embedding,
-      createdAt: now,
+      createdAt,
       updatedAt: now,
     });
 
@@ -363,6 +431,8 @@ async function seedPlaybooks() {
 
 async function main() {
   await initCouchbase();
+
+  await validatePlaybookActionIds();
 
   console.log('Seeding voyageops.agent collections...');
   const policyRulesCount = await seedPolicyRules();

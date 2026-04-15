@@ -303,7 +303,11 @@ export function AgentChat({ agentType = "general", className, onCommand }: Agent
   const incidentsQuery = useQuery({ queryKey: ["incidents"], queryFn: api.incidents });
   const excursionsQuery = useQuery({ queryKey: ["excursions"], queryFn: api.excursions });
   const venuesQuery = useQuery({ queryKey: ["venues"], queryFn: api.venues });
-  const recommendationsQuery = useQuery({ queryKey: ["recommendations"], queryFn: () => api.recommendations() });
+  const recommendationsQuery = useQuery({
+    queryKey: ["recommendations", agentType],
+    queryFn: () => api.recommendations(),
+    enabled: agentType !== "guest-recovery",
+  });
   const shipInfoQuery = useQuery({ queryKey: ["shipInfo"], queryFn: api.shipInfo });
 
   const liveData: LiveChatData = {
@@ -311,7 +315,7 @@ export function AgentChat({ agentType = "general", className, onCommand }: Agent
     incidents: incidentsQuery.data ?? mockIncidents,
     excursions: excursionsQuery.data ?? mockExcursions,
     venues: venuesQuery.data ?? mockVenues,
-    recommendations: recommendationsQuery.data ?? mockRecommendations,
+    recommendations: agentType === "guest-recovery" ? [] : (recommendationsQuery.data ?? mockRecommendations),
     shipInfo: shipInfoQuery.data ?? mockShipInfo,
   };
 

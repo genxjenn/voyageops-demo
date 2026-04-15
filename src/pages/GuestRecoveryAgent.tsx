@@ -1,9 +1,8 @@
-import { RecommendationCard } from "@/components/RecommendationCard";
 import { AgentChat } from "@/components/AgentChat";
 import { StatusBadge } from "@/components/StatusBadge";
 import { User, Crown, CreditCard, Ship, MessageSquare, Star } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { api, type GuestProfile, type IncidentRecord } from "@/lib/api";
+import { api, type GuestProfile, type IncidentRecord, type ActionProposal } from "@/lib/api";
 import { parseTimestamp } from "@/lib/utils";
 import { useEffect, useState } from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -19,6 +18,22 @@ function findGuestById(
 ) {
   if (!guestId) return undefined;
   return guests.find(g => g.guestId === guestId || g.id === guestId);
+}
+
+function findGuestFromCommandText(guests: GuestProfile[], normalizedText: string) {
+  if (!normalizedText) return undefined;
+
+  return guests.find((candidate) => {
+    const fullName = String(candidate.fullName ?? '').toLowerCase();
+    const shortName = String(candidate.name ?? '').toLowerCase();
+    const guestId = String(candidate.guestId ?? '').toLowerCase();
+    const docId = String(candidate.id ?? '').toLowerCase();
+
+    const nameMatch = (fullName && normalizedText.includes(fullName)) || (shortName && normalizedText.includes(shortName));
+    const idMatch = (guestId && normalizedText.includes(guestId)) || (docId && normalizedText.includes(docId));
+
+    return nameMatch || idMatch;
+  });
 }
 
 function getGuestIdentifier(guest: GuestProfile | undefined) {
@@ -120,18 +135,12 @@ const GuestRecoveryAgent = () => {
   };
 
   const [selectedGuestId, setSelectedGuestId] = useState("");
-  const [revealedRecommendationIds, setRevealedRecommendationIds] = useState<string[]>([]);
-  const [activeRecommendationId, setActiveRecommendationId] = useState<string>("");
   
   const guestsQuery = useQuery({ queryKey: ["guests"], queryFn: api.guests });
   const guests = guestsQuery.data ?? [];
-  const recsQuery = useQuery({
-    queryKey: ["recommendations", "guest-recovery"],
-    queryFn: () => api.recommendations("guest-recovery"),
-  });
-  const recs = recsQuery.data ?? [];
   
   const incidentsQuery = useQuery({ queryKey: ["incidents", selectedGuestId], queryFn: () => api.incidents({ guestId: selectedGuestId }), enabled: Boolean(selectedGuestId) });
+  const proposalsQuery = useQuery({ queryKey: ["proposals", selectedGuestId], queryFn: () => api.actionProposals(selectedGuestId), enabled: Boolean(selectedGuestId), refetchInterval: 10000 });
   const allIncidentsQuery = useQuery({ queryKey: ["incidents", "all"], queryFn: () => api.incidents() });
   const venuesQuery = useQuery({ queryKey: ["venues"], queryFn: api.venues });
 
@@ -199,12 +208,7 @@ const GuestRecoveryAgent = () => {
   }, [selectedGuestId, topGuestIds]);
 
   const guest = findGuestById(guests, selectedGuestId) ?? topGuestOptions[0]?.guest ?? guests[0] ?? EMPTY_GUEST;
-  const selectedRec = recs.find(r => r.id === activeRecommendationId)
-    ?? recs.find(r => r.relatedEntityId === getGuestIdentifier(guest))
-    ?? recs[0];
-
-  const visibleRecs = recs.filter(r => revealedRecommendationIds.includes(r.id));
-  const activeRecoveryPlan = visibleRecs.find(r => r.id === selectedRec?.id);
+  const selectedProposal = (proposalsQuery.data ?? [])[0];
   const scenarioVenue = incident?.description
     ? venues.find(venue => incident.description.toLowerCase().includes(String(venue.name).toLowerCase()))
     : undefined;
@@ -214,64 +218,24 @@ const GuestRecoveryAgent = () => {
   const staffingGapPct = scenarioVenue && scenarioVenue.optimalStaff > 0
     ? Math.max(0, Math.round(((scenarioVenue.optimalStaff - scenarioVenue.staffCount) / scenarioVenue.optimalStaff) * 100))
     : undefined;
-  const actionValue = selectedRec?.actions.reduce((sum, action) => sum + (action.estimatedValue ?? 0), 0) ?? 0;
+  const actionValue = selectedProposal?.actions.reduce((sum, action) => sum + (action.estimatedValue ?? 0), 0) ?? 0;
   const spendValue = Number(guest?.onboardSpend ?? 0);
   const protectedValue = Math.round((spendValue + actionValue) * getLoyaltyValueMultiplier(guest?.loyaltyTier));
   const venueRisk = scenarioVenue?.status === "overloaded" ? 8 : scenarioVenue?.status === "busy" ? 4 : 0;
   const beforeRisk = Math.min(48, getSeverityRisk(incident?.severity) + venueRisk + (String(guest?.loyaltyTier).toUpperCase() === "PLATINUM" ? 10 : 0) + (String(guest?.loyaltyTier).toUpperCase() === "DIAMOND" ? 12 : 0));
-  const afterRisk = Math.max(4, beforeRisk - Math.round((selectedRec?.confidence ?? 0) / 3) - Math.min(8, selectedRec?.actions.length ? selectedRec.actions.length * 2 : 0));
-  const actionLabels = selectedRec?.actions.map(action => action.label).join(", ") ?? "No recommended actions available.";
+  const actionCount = selectedProposal?.actions.length ?? 0;
+  const afterRisk = Math.max(4, beforeRisk - Math.min(12, actionCount * 2));
+  const actionLabels = selectedProposal?.actions.map(action => action.label).join(", ") ?? "No proposed actions available.";
 
   const handleChatCommand = (command: string) => {
     const normalized = command.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
-    const asksForPlan = normalized.includes("plan") || normalized.includes("approve") || normalized.includes("queue");
-    const nextIds = new Set(revealedRecommendationIds);
-    let nextActiveRecommendationId = activeRecommendationId;
     let nextSelectedGuestId = selectedGuestId;
 
-    if (
-      normalized.includes("analyze jane doe incident")
-      || normalized.includes("jane doe")
-      || (normalized.includes("jane") && normalized.includes("incident"))
-      || (normalized.includes("jane") && asksForPlan)
-    ) {
-      const janeRec = recs.find(r => /jane doe/i.test(r.title) || /jane doe/i.test(r.summary));
-      if (janeRec) {
-        nextIds.add(janeRec.id);
-        nextActiveRecommendationId = janeRec.id;
-        if (janeRec.relatedEntityId) {
-          nextSelectedGuestId = janeRec.relatedEntityId;
-        }
-      }
+    const guestFromCommand = findGuestFromCommandText(guests, normalized);
+    const commandGuestId = getGuestIdentifier(guestFromCommand);
+    if (commandGuestId) {
+      nextSelectedGuestId = commandGuestId;
     }
-
-    if (
-      normalized.includes("show stark family recovery plan")
-      || normalized.includes("stark family")
-      || (normalized.includes("stark") && normalized.includes("recovery"))
-      || (normalized.includes("stark") && asksForPlan)
-    ) {
-      const starkRec = recs.find(r => /stark/i.test(r.title) || /stark/i.test(r.summary));
-      if (starkRec) {
-        nextIds.add(starkRec.id);
-        nextActiveRecommendationId = starkRec.id;
-        if (starkRec.relatedEntityId) {
-          nextSelectedGuestId = starkRec.relatedEntityId;
-        }
-      }
-    }
-
-    // If user asks for a plan without naming a guest, activate the currently selected guest plan.
-    if (asksForPlan && nextActiveRecommendationId === activeRecommendationId) {
-      const selectedGuestRec = recs.find(r => r.relatedEntityId === selectedGuestId);
-      if (selectedGuestRec) {
-        nextIds.add(selectedGuestRec.id);
-        nextActiveRecommendationId = selectedGuestRec.id;
-      }
-    }
-
-    setRevealedRecommendationIds(Array.from(nextIds));
-    setActiveRecommendationId(nextActiveRecommendationId);
     if (nextSelectedGuestId && nextSelectedGuestId !== selectedGuestId) {
       setSelectedGuestId(nextSelectedGuestId);
     }
@@ -440,40 +404,61 @@ const GuestRecoveryAgent = () => {
             </div>
           ))}
 
-          {visibleRecs.length > 0 && (
-            <>
-              <h2 className="pt-2 text-sm font-semibold text-foreground">Agent Recommendations ({visibleRecs.length})</h2>
-              {visibleRecs.map(rec => (
-                <RecommendationCard key={rec.id} recommendation={rec} />
-              ))}
-            </>
-          )}
         </div>
 
-        {/* Right Column - Approval Queue */}
+        {/* Right Column - Approval Queue (worker-generated action_proposals) */}
         <div className="space-y-4">
           <h2 className="text-sm font-semibold text-foreground">Recovery Plan Approval Queue</h2>
-          <div className="rounded-lg border border-border bg-card p-4">
-            <p className="text-xs text-muted-foreground leading-relaxed">
-              Each recommendation can be staged for human approval here. In the demo, these `APPROVE` actions are placeholders for downstream workflow triggers such as credits, notifications, reservations, and service recovery tasks.
-            </p>
 
-            <div className="mt-3 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs">
-              <span className="text-muted-foreground">Active Plan:</span>{" "}
-              <span className="font-semibold text-foreground">
-                {activeRecoveryPlan ? activeRecoveryPlan.title : "None selected"}
-              </span>
+          {/* Demo Scenario */}
+          <div className="rounded-lg border border-primary/30 bg-primary/5 p-4">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-primary mb-2">Demo Scenario</h3>
+            <div className="text-xs text-muted-foreground space-y-2 leading-relaxed">
+              <p><strong className="text-foreground">Trigger:</strong> {incident ? `${getGuestDisplayName(guest)} was linked to ${incident.type.toLowerCase()} in ${incident.category}. ${incident.description}` : `No active incident is currently associated with ${getGuestDisplayName(guest)}.`}</p>
+              <p><strong className="text-foreground">Analysis:</strong> The agent correlated booking {guest?.bookingId ?? "Unknown"}, loyalty tier {guest?.loyaltyTier ?? "Unknown"}, sailing history {typeof guest?.sailingHistory === "number" ? `${guest.sailingHistory} voyages` : "Unknown"}, and onboard spend {formatCurrency(guest?.onboardSpend)}{scenarioVenue ? ` with ${scenarioVenue.name} operating at ${occupancyPct}% capacity${staffingGapPct ? ` and ${staffingGapPct}% understaffing` : ""}${typeof scenarioVenue.waitTime === "number" ? ` plus a ${scenarioVenue.waitTime}-minute wait time` : ""}` : ""}.</p>
+              <p><strong className="text-foreground">Recovery Plan:</strong> {selectedProposal ? `${selectedProposal.actions.length}-action plan from worker proposal ${selectedProposal.proposalId}: ${actionLabels}.` : "No worker-generated action proposal is currently available for this guest."}</p>
+              <p><strong className="text-foreground">Outcome:</strong> {selectedProposal ? `Estimated ${formatCurrency(protectedValue)} in future value protected. Churn risk reduced from ${beforeRisk}% to ${afterRisk}% based on current guest value, incident severity, and the proposed actions.` : `Outcome cannot be estimated until a worker proposal is available.`}</p>
             </div>
+          </div>
 
-            {activeRecoveryPlan ? (
-              <div className="mt-4 space-y-3">
-                {activeRecoveryPlan.actions.map((action, index) => (
-                  <div key={action.id} className="rounded-lg border border-border bg-muted/30 p-3">
+          {proposalsQuery.isLoading && (
+            <div className="rounded-lg border border-border bg-card p-4">
+              <p className="text-xs text-muted-foreground">Loading proposals…</p>
+            </div>
+          )}
+
+          {!proposalsQuery.isLoading && (proposalsQuery.data ?? []).length === 0 && (
+            <div className="rounded-lg border border-border bg-card p-4">
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                No agent proposals have been generated for this guest yet. The worker creates a proposal automatically once a pending run is processed for this guest's incident.
+              </p>
+            </div>
+          )}
+
+          {(proposalsQuery.data ?? []).map((proposal: ActionProposal) => (
+            <div key={proposal.proposalId} className="rounded-lg border border-border bg-card p-4">
+              <div className="flex items-start justify-between gap-2 mb-3">
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Agent Proposal</p>
+                  <p className="mt-1 text-sm font-medium text-foreground leading-snug">{proposal.summary ?? "Recovery plan ready for review"}</p>
+                </div>
+                <StatusBadge status={proposal.status as any} />
+              </div>
+
+              {proposal.reasoning && (
+                <p className="text-xs text-muted-foreground leading-relaxed mb-3 border-l-2 border-primary/30 pl-2">{proposal.reasoning}</p>
+              )}
+
+              <div className="space-y-2">
+                {proposal.actions.map((action, index) => (
+                  <div key={action.actionId} className="rounded-lg border border-border bg-muted/30 p-3">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0 flex-1">
                         <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Action {index + 1}</p>
                         <p className="mt-1 text-sm font-medium text-foreground">{action.label}</p>
-                        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{action.description}</p>
+                        {action.description && (
+                          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{action.description}</p>
+                        )}
                         {action.estimatedValue ? (
                           <p className="mt-2 text-xs font-medium text-foreground">Estimated value: {formatCurrency(action.estimatedValue)}</p>
                         ) : null}
@@ -485,23 +470,20 @@ const GuestRecoveryAgent = () => {
                   </div>
                 ))}
               </div>
-            ) : (
-              <p className="mt-4 text-sm text-muted-foreground">
-                No recovery plan is awaiting approval yet. Ask the chat to analyze the selected guest case to reveal the recommended actions.
-              </p>
-            )}
-          </div>
 
-          {/* Demo Scenario */}
-          <div className="rounded-lg border border-primary/30 bg-primary/5 p-4">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-primary mb-2">Demo Scenario</h3>
-            <div className="text-xs text-muted-foreground space-y-2 leading-relaxed">
-              <p><strong className="text-foreground">Trigger:</strong> {incident ? `${getGuestDisplayName(guest)} was linked to ${incident.type.toLowerCase()} in ${incident.category}. ${incident.description}` : `No active incident is currently associated with ${getGuestDisplayName(guest)}.`}</p>
-              <p><strong className="text-foreground">Analysis:</strong> The agent correlated booking {guest?.bookingId ?? "Unknown"}, loyalty tier {guest?.loyaltyTier ?? "Unknown"}, sailing history {typeof guest?.sailingHistory === "number" ? `${guest.sailingHistory} voyages` : "Unknown"}, and onboard spend {formatCurrency(guest?.onboardSpend)}{scenarioVenue ? ` with ${scenarioVenue.name} operating at ${occupancyPct}% capacity${staffingGapPct ? ` and ${staffingGapPct}% understaffing` : ""}${typeof scenarioVenue.waitTime === "number" ? ` plus a ${scenarioVenue.waitTime}-minute wait time` : ""}` : ""}.</p>
-              <p><strong className="text-foreground">Recommendation:</strong> {selectedRec ? `${selectedRec.actions.length}-action recovery plan: ${actionLabels}.` : "No live recovery recommendation is currently available for this case."}</p>
-              <p><strong className="text-foreground">Outcome:</strong> {selectedRec ? `Estimated ${formatCurrency(protectedValue)} in future value protected. Churn risk reduced from ${beforeRisk}% to ${afterRisk}% based on current guest value, incident severity, and the recommended actions.` : `Outcome cannot be estimated until a recommendation is available.`}</p>
+              {proposal.interactive?.followUpQuestions && proposal.interactive.followUpQuestions.length > 0 && (
+                <div className="mt-3 pt-3 border-t border-border">
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Follow-up Questions</p>
+                  <ul className="space-y-1">
+                    {proposal.interactive.followUpQuestions.map((q, i) => (
+                      <li key={i} className="text-xs text-muted-foreground leading-relaxed">• {q}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
-          </div>
+          ))}
+
         </div>
       </div>
     </div>

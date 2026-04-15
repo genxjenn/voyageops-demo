@@ -34,9 +34,10 @@
 
 function OnUpdate(doc, meta) {
   if (!doc || doc.status !== "open") return;
-  if (doc.agentRunCreated) return; // guard against duplicate run creation
 
-  var runId = meta.id + "_run";
+  var runId = meta.id + "::guest-recovery";
+  if (dst[runId]) return; // idempotency: skip if run already exists
+
   dst[runId] = {
     runId: runId,
     agentType: "guest-recovery",

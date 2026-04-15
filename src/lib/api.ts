@@ -57,6 +57,37 @@ interface GuestWithIncidents {
   incidents: IncidentRecord[];
 }
 
+export interface ActionProposalAction {
+  actionId: string;
+  label: string;
+  description?: string;
+  estimatedValue?: number;
+}
+
+export interface ActionProposal {
+  proposalId: string;
+  agentRunId: string;
+  runId: string;
+  guestId: string;
+  incidentId: string;
+  status: string;
+  summary?: string;
+  reasoning?: string;
+  priority?: string;
+  actions: ActionProposalAction[];
+  interactive?: {
+    operatorMessage?: string;
+    followUpQuestions?: string[];
+    alternativeActions?: ActionProposalAction[];
+  };
+  approval?: {
+    required?: boolean;
+    approverRole?: string;
+  };
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface AgentQueryResponse {
   response: string;
   incidents?: IncidentRecord[];
@@ -191,6 +222,8 @@ export const api = {
   guestWithIncidents: (id: string) => fetchJson<GuestWithIncidents>(`/api/guests/${id}`),
   agentQuery: (query: string, agentType: "guest-recovery" | "port-disruption" | "onboard-ops" | "general") =>
     postJson<AgentQueryResponse>("/api/agent-query", { query, agentType }),
+  actionProposals: (guestId?: string, incidentId?: string) =>
+    fetchJson<ActionProposal[]>("/api/action-proposals", { guestId, incidentId }),
 };
 
 export function useLiveDashboardData() {

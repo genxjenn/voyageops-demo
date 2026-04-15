@@ -1,50 +1,37 @@
 {
-  "$id": "voAgent.action_proposals",
+  "$id": "voAgent.agent_runs",
   "type": "object",
   "additionalProperties": true,
   "required": [
-    "proposalId",
-    "agentRunId",
-    "guestId",
+    "runId",
     "incidentId",
+    "guestId",
     "status",
-    "actions",
     "createdAt",
     "updatedAt"
   ],
   "properties": {
-    "proposalId": { "type": "string", "minLength": 1 },
-    "agentRunId": { "type": "string", "minLength": 1 },
-    "guestId": { "type": "string", "minLength": 1 },
+    "runId": { "type": "string", "minLength": 1 },
     "incidentId": { "type": "string", "minLength": 1 },
+    "guestId": { "type": "string", "minLength": 1 },
     "status": {
       "type": "string",
-      "enum": ["proposed", "queued_for_approval", "approved", "rejected", "executed", "cancelled"]
+      "enum": ["pending", "started", "completed", "failed", "cancelled"]
     },
-    "summary": { "type": "string" },
-    "reasoning": { "type": "string" },
-    "actions": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "type": "object",
-        "required": ["actionId", "label"],
-        "properties": {
-          "actionId": { "type": "string" },
-          "label": { "type": "string" },
-          "description": { "type": "string" },
-          "estimatedValue": { "type": "number" }
-        }
-      }
-    },
-    "approval": {
+    "lastProcessedStep": { "type": "string" },
+    "proposalId": { "type": "string" },
+    "lastError": {
       "type": "object",
+      "required": ["step", "message", "updatedAt"],
       "properties": {
-        "required": { "type": "boolean" },
-        "approverRole": { "type": "string" }
+        "step": { "type": "string" },
+        "message": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
       }
     },
     "createdAt": { "type": "string", "format": "date-time" },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "completedAt": { "type": "string", "format": "date-time" },
     "updatedAt": { "type": "string", "format": "date-time" }
   }
 }

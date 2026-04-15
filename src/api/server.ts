@@ -2,7 +2,7 @@
 import express from 'express';
 import routes from './routes.ts';
 import dotenv from 'dotenv';
-import { initCouchbase } from '../lib/couchbase.ts';
+import { initCouchbase, db } from '../lib/couchbase.ts';
 
 dotenv.config({ path: '.env' }); // Load .env specifically
 
@@ -29,6 +29,72 @@ async function startServer() {
     });
 
     app.use('/api', routes);      // all API endpoints under /api
+
+    // Safety fallback endpoint for action proposals.
+    // This keeps the UI working even when a dev server hot-reload misses a route update.
+    app.get('/api/action-proposals', async (req, res) => {
+      try {
+        const guestId = req.query.guestId as string | undefined;
+        const incidentId = req.query.incidentId as string | undefined;
+        const runFilterParts: string[] = ['r.proposalId IS NOT MISSING'];
+        const runParams: any = {};
+
+        if (guestId) {
+          runFilterParts.push('r.guestId = $guestId');
+          runParams.guestId = guestId;
+        }
+        if (incidentId) {
+          runFilterParts.push('r.incidentId = $incidentId');
+          runParams.incidentId = incidentId;
+        }
+
+        const runsQuery = `
+          SELECT r.proposalId, r.updatedAt
+          FROM voyageops.agent.agent_runs r
+          WHERE ${runFilterParts.join(' AND ')}
+          ORDER BY r.updatedAt DESC
+          LIMIT 100
+        `;
+
+        const runsResult = await db.cluster.query(runsQuery, { parameters: runParams, timeout: 10000 });
+        const proposalIds = Array.from(
+          new Set(
+            (runsResult.rows as any[])
+              .map((row) => String(row.proposalId || '').trim())
+              .filter(Boolean),
+          ),
+        ).slice(0, 50);
+
+        const fetched = await Promise.allSettled(
+          proposalIds.map(async (proposalId) => {
+            const doc = await db.actionProposals.get(proposalId);
+            return { _key: proposalId, ...(doc.content as Record<string, unknown>) };
+          }),
+        );
+
+        const proposals = fetched
+          .flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []))
+          .sort((a, b) => String((b as any).createdAt || '').localeCompare(String((a as any).createdAt || '')));
+
+        res.json(proposals);
+      } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Failed to load action proposals' });
+      }
+    });
+
+    app.get('/api/_routes', (req, res) => {
+      const appRouter = (app as any)?._router;
+      const stack = Array.isArray(appRouter?.stack) ? appRouter.stack : [];
+      const routes = stack
+        .filter((layer: any) => layer?.route?.path)
+        .map((layer: any) => {
+          const methods = Object.keys(layer.route.methods || {}).filter((m) => layer.route.methods[m]);
+          return { path: layer.route.path, methods };
+        });
+      res.json(routes);
+    });
+
     app.use((err, req, res, next) => {
       console.error(err);
       res.status(500).json({ error: 'Internal Server Error' });

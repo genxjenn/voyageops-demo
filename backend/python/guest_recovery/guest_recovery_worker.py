@@ -291,7 +291,13 @@ def _fetch_actions_and_policies(cluster: Cluster, playbook_id: str, loyalty_tier
     UNNEST p.actionIds AS aid
     JOIN voyageops.agent.action_catalog a ON aid = a.actionId
     WHERE META(p).id = $playbookId
-      AND (a.loyaltyTier = $loyaltyTier OR a.loyaltyTier = "any")
+            AND (
+                        (IS_STRING(a.loyaltyTier) AND LOWER(TRIM(a.loyaltyTier)) IN ["any", $loyaltyTier])
+                        OR (
+                                IS_ARRAY(a.loyaltyTier)
+                                AND ANY tier IN a.loyaltyTier SATISFIES LOWER(TRIM(tier)) IN ["any", $loyaltyTier] END
+                        )
+                    )
       AND a.active = true
     """
     policies_query = "SELECT META(p).id AS policyId, p.* FROM voyageops.agent.policy_rules p WHERE p.enabled = true"
@@ -299,7 +305,7 @@ def _fetch_actions_and_policies(cluster: Cluster, playbook_id: str, loyalty_tier
     try:
         action_rows = cluster.query(
             eligible_actions_query,
-            QueryOptions(named_parameters={"playbookId": playbook_id, "loyaltyTier": loyalty_tier}),
+            QueryOptions(named_parameters={"playbookId": playbook_id, "loyaltyTier": str(loyalty_tier).strip().lower()}),
         )
         policy_rows = cluster.query(policies_query)
         actions = [dict(row) for row in action_rows.rows()]
@@ -314,9 +320,34 @@ def _fetch_actions_and_policies(cluster: Cluster, playbook_id: str, loyalty_tier
 
 
 def _build_prompt(context: Mapping[str, Any], actions: list[dict[str, Any]], policies: list[dict[str, Any]]) -> tuple[str, str]:
+    recent_incidents = int(context.get("recentIncidents") or 0)
+    loyalty_tier = str(context.get("loyaltyTier") or "GOLD").upper()
+    onboard_spend = float(context.get("onboardSpend") or 0)
+
+    base_budget = min(500.0, max(75.0, round(onboard_spend * 0.06, 2)))
+    tier_multiplier = {
+        "DIAMOND": 1.75,
+        "ELITE PLATINUM": 1.5,
+        "EMERALD": 1.35,
+        "PLATINUM": 1.2,
+        "GOLD": 1.0,
+    }.get(loyalty_tier, 1.0)
+    max_recovery_budget = round(base_budget * tier_multiplier, 2)
+
+    def _action_rank(action: Mapping[str, Any]) -> float:
+        estimated = float(action.get("estimatedValue") or 0)
+        in_budget_bonus = 25 if estimated <= max_recovery_budget else -10
+        recent_escalation_bonus = 8 if recent_incidents >= 2 else 0
+        severity_bonus = 10 if str(context.get("severity", "")).lower() in {"high", "critical"} else 0
+        return estimated + in_budget_bonus + recent_escalation_bonus + severity_bonus
+
+    ranked_actions = sorted(actions, key=_action_rank, reverse=True)
+    shortlist = ranked_actions[: min(5, len(ranked_actions))]
+
     system_message = (
         "You are the VoyageOps Guest Recovery Agent. "
         "Select one approved recovery action from the eligible catalog and explain why it is the best fit. "
+        "Also provide interactive alternatives and follow-up prompts an operator can use immediately. "
         "Strictly adhere to policy rules. "
         "Return valid JSON only."
     )
@@ -337,15 +368,20 @@ def _build_prompt(context: Mapping[str, Any], actions: list[dict[str, Any]], pol
                 "recentIncidents": context.get("recentIncidents", 0),
             },
             "eligibleActions": actions,
+            "actionShortlist": shortlist,
             "policyRules": policies,
             "task": {
                 "selectExactlyOneAction": True,
                 "escalateIfRecentIncidentsGte": 2,
+                "targetMaxRecoveryBudget": max_recovery_budget,
                 "responseSchema": {
                     "actionId": "string",
                     "summary": "string",
                     "justification": "string",
                     "priority": "low|medium|high",
+                    "operatorMessage": "string",
+                    "followUpQuestions": ["string"],
+                    "alternativeActionIds": ["string"],
                 },
             },
         }
@@ -372,6 +408,51 @@ def _parse_recommendation(response_content: str, actions: list[dict[str, Any]]) 
     if priority not in {"low", "medium", "high"}:
         raise AgentWorkerError("llm_response", f"LLM returned unsupported priority: {payload['priority']}")
 
+    follow_up_questions_raw = payload.get("followUpQuestions")
+    if isinstance(follow_up_questions_raw, list):
+        follow_up_questions = [str(item).strip() for item in follow_up_questions_raw if str(item).strip()]
+    else:
+        follow_up_questions = []
+
+    alternative_action_ids_raw = payload.get("alternativeActionIds")
+    alternative_action_ids = (
+        [str(item) for item in alternative_action_ids_raw if str(item)]
+        if isinstance(alternative_action_ids_raw, list)
+        else []
+    )
+
+    alternatives: list[dict[str, Any]] = []
+    for action_id in alternative_action_ids:
+        if action_id == selected_action["actionId"]:
+            continue
+        alt = next((action for action in actions if action.get("actionId") == action_id), None)
+        if alt:
+            alternatives.append(
+                {
+                    "actionId": str(alt["actionId"]),
+                    "label": str(alt["label"]),
+                    "description": str(alt.get("description") or ""),
+                    "estimatedValue": float(alt.get("estimatedValue") or 0),
+                }
+            )
+
+    if not alternatives:
+        for fallback in actions:
+            if fallback.get("actionId") == selected_action["actionId"]:
+                continue
+            alternatives.append(
+                {
+                    "actionId": str(fallback["actionId"]),
+                    "label": str(fallback["label"]),
+                    "description": str(fallback.get("description") or ""),
+                    "estimatedValue": float(fallback.get("estimatedValue") or 0),
+                }
+            )
+            if len(alternatives) >= 2:
+                break
+
+    operator_message = str(payload.get("operatorMessage") or payload["summary"]).strip()
+
     return {
         "summary": str(payload["summary"]),
         "reasoning": str(payload["justification"]),
@@ -384,6 +465,11 @@ def _parse_recommendation(response_content: str, actions: list[dict[str, Any]]) 
                 "estimatedValue": float(selected_action.get("estimatedValue") or 0),
             }
         ],
+        "interactive": {
+            "operatorMessage": operator_message,
+            "followUpQuestions": follow_up_questions[:3],
+            "alternativeActions": alternatives[:3],
+        },
     }
 
 
@@ -433,6 +519,7 @@ def _write_proposal(
         "reasoning": recommendation["reasoning"],
         "priority": recommendation["priority"],
         "actions": recommendation["actions"],
+        "interactive": recommendation.get("interactive", {}),
         "approval": {
             "required": True,
             "approverRole": "guest-services-supervisor",

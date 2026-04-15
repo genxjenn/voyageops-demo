@@ -357,6 +357,82 @@ router.get('/recommendations', async (req, res) => {
   }
 });
 
+// API: Action proposals (worker-generated, per guest or incident)
+router.get('/action-proposals', async (req, res) => {
+  try {
+    const guestId = req.query.guestId as string | undefined;
+    const incidentId = req.query.incidentId as string | undefined;
+    const filterParts: string[] = [];
+    const params: any = {};
+    if (guestId) { filterParts.push('p.guestId = $guestId'); params.guestId = guestId; }
+    if (incidentId) { filterParts.push('p.incidentId = $incidentId'); params.incidentId = incidentId; }
+    const where = filterParts.length ? `WHERE ${filterParts.join(' AND ')}` : '';
+    const q = `SELECT META(p).id AS _key, p.* FROM voyageops.agent.action_proposals p ${where} ORDER BY p.createdAt DESC LIMIT 50`;
+    const result = await db.cluster.query(q, { parameters: params, timeout: 10000 });
+    res.json(result.rows);
+  } catch (error) {
+    const message = String((error as any)?.message || error || '');
+    const missingIndex = message.includes('No index available on keyspace') && message.includes('action_proposals');
+
+    if (!missingIndex) {
+      console.error(error);
+      return res.status(500).json({ error: 'Failed to load action proposals' });
+    }
+
+    try {
+      // Fallback path for clusters without a N1QL index on agent.action_proposals.
+      // We can still resolve proposal docs via proposalId references stored on agent_runs.
+      const guestId = req.query.guestId as string | undefined;
+      const incidentId = req.query.incidentId as string | undefined;
+      const runFilterParts: string[] = ['r.proposalId IS NOT MISSING'];
+      const runParams: any = {};
+
+      if (guestId) {
+        runFilterParts.push('r.guestId = $guestId');
+        runParams.guestId = guestId;
+      }
+      if (incidentId) {
+        runFilterParts.push('r.incidentId = $incidentId');
+        runParams.incidentId = incidentId;
+      }
+
+      const runsQuery = `
+        SELECT r.proposalId, r.updatedAt
+        FROM voyageops.agent.agent_runs r
+        WHERE ${runFilterParts.join(' AND ')}
+        ORDER BY r.updatedAt DESC
+        LIMIT 100
+      `;
+
+      const runsResult = await db.cluster.query(runsQuery, { parameters: runParams, timeout: 10000 });
+      const orderedProposalIds = Array.from(
+        new Set(
+          (runsResult.rows as any[])
+            .map((row) => String(row.proposalId || '').trim())
+            .filter(Boolean),
+        ),
+      ).slice(0, 50);
+
+      const proposalFetches = await Promise.allSettled(
+        orderedProposalIds.map(async (proposalId) => {
+          const doc = await db.actionProposals.get(proposalId);
+          return { _key: proposalId, ...(doc.content as Record<string, unknown>) };
+        }),
+      );
+
+      const proposals = proposalFetches
+        .filter((result): result is PromiseFulfilledResult<Record<string, unknown>> => result.status === 'fulfilled')
+        .map((result) => result.value)
+        .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+
+      return res.json(proposals);
+    } catch (fallbackError) {
+      console.error(fallbackError);
+      return res.status(500).json({ error: 'Failed to load action proposals' });
+    }
+  }
+});
+
 // API: Vector-powered agent query
 router.post('/agent-query', async (req, res) => {
   try {

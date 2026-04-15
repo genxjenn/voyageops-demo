@@ -83,10 +83,8 @@ async function readActionCatalogFile(filePath: string): Promise<ActionCatalogEnt
       if (line.trim()) {
         try {
           const action = JSON.parse(line) as ActionCatalogEntry;
-          // Only include generated action variants from the data file.
-          if (action.actionId.includes('_vip') || action.actionId.includes('_std')) {
-            actions.push(action);
-          }
+          // Seed every catalog action so playbook actionIds always resolve.
+          actions.push(action);
         } catch (error) {
           console.warn(`Skipped invalid JSON line: ${line.substring(0, 50)}...`);
         }
@@ -112,9 +110,7 @@ async function seedActionCatalogExtended(filePath: string) {
   console.log(`Loaded ${actions.length} new actions\n`);
 
   if (actions.length === 0) {
-    throw new Error(
-      'No matching action_catalog records found. Expected actionId values containing _vip or _std.'
-    );
+    throw new Error('No valid action_catalog records found in input file.');
   }
 
   let count = 0;
