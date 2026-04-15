@@ -177,7 +177,7 @@ The `POST /api/agent-query` endpoint provides semantic retrieval over `voyageops
 
 ```
 OPENAI_API_KEY=sk-...              # Required for embedding generation
-OPENAI_EMBED_MODEL=text-embedding-3-small  # Optional, defaults to text-embedding-3-small
+OPENAI_EMBEDDING_MODEL=text-embedding-3-small  # Optional, defaults to text-embedding-3-small
 CB_VECTOR_INDEX_CATEGORY=          # Optional: override active index name for vector_category_incidents
 CB_VECTOR_INDEX_TYPE=              # Optional: override active index name for vector_type_incidents
 CB_VECTOR_INDEX_DESC=              # Optional: override active index name for vector_desc_incidents
@@ -421,7 +421,7 @@ The `guest-recovery` agent type now calls the live vector endpoint:
 Environment variables required:
 ```
 OPENAI_API_KEY=sk-...        # Required for embedding
-OPENAI_EMBED_MODEL=text-embedding-3-small  # Optional override
+OPENAI_EMBEDDING_MODEL=text-embedding-3-small  # Optional override
 CB_VECTOR_INDEX_CATEGORY=    # Optional: override default index name
 CB_VECTOR_INDEX_TYPE=        # Optional: override default index name
 CB_VECTOR_INDEX_DESC=        # Optional: override default index name

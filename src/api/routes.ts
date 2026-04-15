@@ -4,39 +4,29 @@ import { db } from '../lib/couchbase.ts';
 
 const router = express.Router();
 
+function getRequiredEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(`Missing required environment variable: ${name}`);
+  }
+  return value;
+}
+
 const VECTOR_INDEX_CONFIG = [
   {
     fieldName: 'vector_category_incidents',
-    indexNames: [
-      process.env.CB_VECTOR_INDEX_CATEGORY,
-      'hyperscale_voGuestIncidentOpenAI_vector_category_incidents',
-      'vector_category_incidents',
-      'idx_incidents_vec_category',
-      'idx_vector_category_incidents',
-    ].filter(Boolean) as string[],
+    indexNames: [getRequiredEnv('CB_VECTOR_INDEX_CATEGORY')],
   },
   {
     fieldName: 'vector_type_incidents',
-    indexNames: [
-      process.env.CB_VECTOR_INDEX_TYPE,
-      'hyperscale_voGuestIncidentOpenAI_vector_type_incidents',
-      'vector_type_incidents',
-      'idx_incidents_vec_type',
-      'idx_vector_type_incidents',
-    ].filter(Boolean) as string[],
+    indexNames: [getRequiredEnv('CB_VECTOR_INDEX_TYPE')],
   },
   {
     fieldName: 'vector_desc_incidents',
-    indexNames: [
-      process.env.CB_VECTOR_INDEX_DESC,
-      'hyperscale_voGuestIncidentOpenAI_vector_desc_incidents',
-      'vector_desc_incidents',
-      'idx_incidents_vec_desc',
-      'idx_vector_desc_incidents',
-    ].filter(Boolean) as string[],
+    indexNames: [getRequiredEnv('CB_VECTOR_INDEX_DESC')],
   },
 ];
-const OPENAI_EMBED_MODEL = process.env.OPENAI_EMBED_MODEL || 'text-embedding-3-small';
+const OPENAI_EMBEDDING_MODEL = getRequiredEnv('OPENAI_EMBEDDING_MODEL');
 
 function tokenizeText(input: string) {
   return new Set(
@@ -121,7 +111,7 @@ async function getQueryEmbedding(query: string) {
     },
     body: JSON.stringify({
       input: query,
-      model: OPENAI_EMBED_MODEL,
+      model: OPENAI_EMBEDDING_MODEL,
     }),
   });
 
@@ -315,6 +305,71 @@ router.get('/incidents', async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Failed to load incidents' });
+  }
+});
+
+// API: Server-side prioritized guest incidents for Guest Recovery top-10 list
+router.get('/incidents/prioritized', async (req, res) => {
+  try {
+    const q = `
+      WITH scored AS (
+        SELECT META(i).id AS incidentDocId,
+               i AS incident,
+               META(g).id AS guestDocId,
+               g AS guest,
+               ROUND(
+                 IFMISSINGORNULL(g.onboardSpend, 0)
+                 * CASE LOWER(IFMISSINGORNULL(i.severity, 'low'))
+                     WHEN 'critical' THEN 4
+                     WHEN 'high' THEN 3
+                     WHEN 'medium' THEN 2
+                     ELSE 1
+                   END
+                 * CASE LOWER(IFMISSINGORNULL(i.status, 'open'))
+                     WHEN 'open' THEN 1.2
+                     WHEN 'reviewing' THEN 1.1
+                     WHEN 'approved' THEN 1.0
+                     WHEN 'executed' THEN 0.8
+                     WHEN 'closed' THEN 0.2
+                     WHEN 'pending' THEN 1.0
+                     ELSE 1.0
+                   END
+                 * CASE UPPER(IFMISSINGORNULL(g.loyaltyTier, 'GOLD'))
+                     WHEN 'DIAMOND' THEN 2.0
+                     WHEN 'ELITE PLATINUM' THEN 1.5
+                     WHEN 'EMERALD' THEN 1.3
+                     WHEN 'PLATINUM' THEN 1.1
+                     ELSE 1.0
+                   END
+                 * 0.25,
+                 0
+               ) AS potential
+        FROM voyageops.guests.incidents i
+        JOIN voyageops.guests.guests g ON i.guestId = META(g).id
+        WHERE LOWER(IFMISSINGORNULL(i.status, 'open')) != 'closed'
+      ),
+      dedup AS (
+        SELECT scored.*,
+               ROW_NUMBER() OVER (
+                 PARTITION BY IFMISSINGORNULL(scored.incident.guestId, scored.guestDocId)
+                 ORDER BY scored.potential DESC
+               ) AS rankPerGuest
+        FROM scored
+      )
+      SELECT OBJECT_PUT(dedup.incident, 'incidentId', IFMISSINGORNULL(dedup.incident.incidentId, dedup.incidentDocId)) AS incident,
+             OBJECT_PUT(dedup.guest, 'guestId', IFMISSINGORNULL(dedup.guest.guestId, dedup.guestDocId)) AS guest,
+             dedup.potential
+      FROM dedup
+      WHERE dedup.rankPerGuest = 1
+      ORDER BY dedup.potential DESC
+      LIMIT 10
+    `;
+
+    const result = await db.cluster.query(q, { timeout: 10000 });
+    res.json(result.rows);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Failed to load prioritized incidents' });
   }
 });
 

@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as readline from 'readline';
 import { initCouchbase, db } from '../src/lib/couchbase.ts';
 
-const OPENAI_EMBED_MODEL = process.env.OPENAI_EMBED_MODEL || 'text-embedding-3-small';
+const OPENAI_EMBEDDING_MODEL = process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small';
 
 type ActionCatalogEntry = {
   actionId: string;
@@ -34,7 +34,7 @@ async function getEmbedding(text: string): Promise<number[]> {
     },
     body: JSON.stringify({
       input: text,
-      model: OPENAI_EMBED_MODEL,
+      model: OPENAI_EMBEDDING_MODEL,
     }),
   });
 

@@ -28,7 +28,7 @@ type PolicyRuleSeed = {
   directives: Record<string, unknown>;
 };
 
-const OPENAI_EMBED_MODEL = process.env.OPENAI_EMBED_MODEL || 'text-embedding-3-small';
+const OPENAI_EMBEDDING_MODEL = process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small';
 
 const playbookSeeds: PlaybookSeed[] = [
   {
@@ -288,7 +288,7 @@ async function getEmbedding(text: string): Promise<number[]> {
     },
     body: JSON.stringify({
       input: text,
-      model: OPENAI_EMBED_MODEL,
+      model: OPENAI_EMBEDDING_MODEL,
     }),
   });
 

@@ -2,7 +2,7 @@ import { AgentChat } from "@/components/AgentChat";
 import { StatusBadge } from "@/components/StatusBadge";
 import { User, Crown, CreditCard, Ship, MessageSquare, Star } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { api, type GuestProfile, type IncidentRecord, type ActionProposal } from "@/lib/api";
+import { api, type GuestProfile, type IncidentRecord, type ActionProposal, type PrioritizedIncident } from "@/lib/api";
 import { parseTimestamp } from "@/lib/utils";
 import { useEffect, useState } from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -123,7 +123,6 @@ function getSeverityPriority(severity: string | undefined) {
 // │     Docs: https://docs.couchbase.com/server/current/eventing/eventing-overview.html │
 // └─────────────────────────────────────────────────────────────────────────────┘
 const GuestRecoveryAgent = () => {
-  const POTENTIAL_SCALE = 0.25;
   const EMPTY_GUEST: GuestProfile = {
     guestId: "",
     fullName: "Unknown guest",
@@ -141,11 +140,11 @@ const GuestRecoveryAgent = () => {
   
   const incidentsQuery = useQuery({ queryKey: ["incidents", selectedGuestId], queryFn: () => api.incidents({ guestId: selectedGuestId }), enabled: Boolean(selectedGuestId) });
   const proposalsQuery = useQuery({ queryKey: ["proposals", selectedGuestId], queryFn: () => api.actionProposals(selectedGuestId), enabled: Boolean(selectedGuestId), refetchInterval: 10000 });
-  const allIncidentsQuery = useQuery({ queryKey: ["incidents", "all"], queryFn: () => api.incidents() });
+  const prioritizedIncidentsQuery = useQuery({ queryKey: ["incidents", "prioritized", "guest-recovery"], queryFn: api.prioritizedIncidents });
   const venuesQuery = useQuery({ queryKey: ["venues"], queryFn: api.venues });
 
   const incidents = incidentsQuery.data ?? [];
-  const allIncidents = allIncidentsQuery.data ?? incidentsQuery.data ?? [];
+  const topRankedIncidents = prioritizedIncidentsQuery.data ?? [];
   const venues = venuesQuery.data ?? [];
   const nonClosedIncidents = incidents.filter(inc => String(inc.status).toLowerCase() !== "closed");
   const closedIncidents = incidents.filter(inc => inc.status === "closed");
@@ -160,35 +159,6 @@ const GuestRecoveryAgent = () => {
       return updatedB - updatedA;
     })[0] ?? incidents[0];
 
-  const severityWeight: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
-  const statusWeight: Record<string, number> = { open: 1.2, reviewing: 1.1, approved: 1.0, executed: 0.8, closed: 0.2 };
-
-  const rankedIncidents = allIncidents
-    .map(inc => {
-      const relatedGuest = findGuestById(guests, inc.guestId);
-      const spend = Number(relatedGuest?.onboardSpend ?? 0);
-      const potential = Math.round(
-        spend *
-          (severityWeight[inc.severity] ?? 1) *
-          (statusWeight[inc.status] ?? 1) *
-          getLoyaltyValueMultiplier(relatedGuest?.loyaltyTier) *
-          POTENTIAL_SCALE,
-      );
-      return { incident: inc, guest: relatedGuest, potential };
-    })
-    .sort((a, b) => b.potential - a.potential);
-
-  const seenRankedGuestIds = new Set<string>();
-  const topRankedIncidents = rankedIncidents
-    .filter(({ incident: rankedIncident }) => {
-      const guestId = rankedIncident.guestId;
-      if (!guestId || seenRankedGuestIds.has(guestId)) {
-        return false;
-      }
-      seenRankedGuestIds.add(guestId);
-      return true;
-    })
-    .slice(0, 10);
   const topGuestIds = Array.from(
     new Set(
       topRankedIncidents
@@ -383,12 +353,12 @@ const GuestRecoveryAgent = () => {
         {/* Center Column - Ranked Incidents */}
         <div className="space-y-4">
           <h2 className="text-sm font-semibold text-foreground">Incidents Ranked by Lost Revenue Potential ({topRankedIncidents.length})</h2>
-          {topRankedIncidents.map(({ incident: rankedIncident, guest: rankedGuest, potential }, index) => (
+          {topRankedIncidents.map(({ incident: rankedIncident, guest: rankedGuest, potential }: PrioritizedIncident, index) => (
             <div key={getIncidentIdentifier(rankedIncident)} className="rounded-lg border border-border bg-card p-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">#{index + 1} Risk Priority</p>
-                  <p className="text-sm font-semibold text-foreground">{rankedGuest?.fullName ?? rankedGuest?.name ?? "Unknown Guest"}</p>
+                  <p className="text-sm font-semibold text-foreground">{rankedGuest?.fullName ?? rankedGuest?.name ?? findGuestById(guests, rankedIncident.guestId)?.fullName ?? "Unknown Guest"}</p>
                 </div>
                 <div className="text-right">
                   <p className="text-xs text-muted-foreground">Est. Lost Revenue Potential</p>

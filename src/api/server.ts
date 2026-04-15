@@ -1,10 +1,8 @@
 // server.ts
+import 'dotenv/config';
 import express from 'express';
 import routes from './routes.ts';
-import dotenv from 'dotenv';
 import { initCouchbase, db } from '../lib/couchbase.ts';
-
-dotenv.config({ path: '.env' }); // Load .env specifically
 
 async function startServer() {
   try {

@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { initCouchbase, db } from '../src/lib/couchbase.ts';
 import { excursions } from '../src/data/mockData.ts';
 
-const OPENAI_EMBED_MODEL = process.env.OPENAI_EMBED_MODEL || 'text-embedding-3-small';
+const OPENAI_EMBEDDING_MODEL = process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small';
 
 async function getEmbedding(text: string): Promise<number[]> {
   const apiKey = process.env.OPENAI_API_KEY;
@@ -18,7 +18,7 @@ async function getEmbedding(text: string): Promise<number[]> {
     },
     body: JSON.stringify({
       input: text,
-      model: OPENAI_EMBED_MODEL,
+      model: OPENAI_EMBEDDING_MODEL,
     }),
   });
 

@@ -50,8 +50,8 @@ def get_settings() -> Settings:
         couchbase_bucket=os.getenv("COUCHBASE_BUCKET", "voyageops"),
         openai_api_key=get_required_env("OPENAI_API_KEY"),
         openai_model=os.getenv("OPENAI_MODEL", "gpt-4o"),
-        openai_embed_model=os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small"),
-        playbook_index_name=os.getenv("CB_PLAYBOOK_VECTOR_INDEX", "vector_playbook_idx"),
+        openai_embed_model=get_required_env("OPENAI_EMBEDDING_MODEL"),
+        playbook_index_name=get_required_env("CB_PLAYBOOK_VECTOR_INDEX"),
     )
 
 
@@ -566,7 +566,7 @@ def run_guest_recovery_agent(agent_run_or_id: str | Mapping[str, Any]) -> dict[s
             collections["agent_runs"],
             run_id,
             run_document,
-            status="completed",
+            status="awaiting_approval",
             step="write_proposal",
             proposal_id=proposal_id,
         )
@@ -575,7 +575,7 @@ def run_guest_recovery_agent(agent_run_or_id: str | Mapping[str, Any]) -> dict[s
             "proposalId": proposal_id,
             "incidentId": run_document["incidentId"],
             "guestId": run_document["guestId"],
-            "status": "completed",
+            "status": "awaiting_approval",
         }
     except AgentWorkerError as error:
         if run_id and run_document is not None:

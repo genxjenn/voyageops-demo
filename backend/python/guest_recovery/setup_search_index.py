@@ -17,10 +17,11 @@ from pathlib import Path
 from couchbase.auth import PasswordAuthenticator
 from couchbase.cluster import Cluster
 from couchbase.exceptions import CouchbaseException
-from couchbase.exceptions import CouchbaseException, QueryIndexAlreadyExistsException
+from couchbase.exceptions import QueryIndexAlreadyExistsException
 from couchbase.management.search import SearchIndex
 from couchbase.options import ClusterOptions, QueryOptions
 from couchbase.n1ql import QueryScanConsistency
+import os
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
@@ -147,8 +148,8 @@ def main() -> None:
     endpoint = get_required_env("COUCHBASE_ENDPOINT")
     user = get_required_env("COUCHBASE_USER")
     password = get_required_env("COUCHBASE_PASSWORD")
-    bucket = get_required_env("COUCHBASE_BUCKET") if "COUCHBASE_BUCKET" in __import__("os").environ else "voyageops"
-    index_name = __import__("os").getenv("CB_PLAYBOOK_VECTOR_INDEX", "vector_playbook_idx")
+    bucket = os.getenv("COUCHBASE_BUCKET", "voyageops")
+    index_name = get_required_env("CB_PLAYBOOK_VECTOR_INDEX")
 
     print(f"Connecting to {endpoint} ...")
     cluster = connect(endpoint, user, password)

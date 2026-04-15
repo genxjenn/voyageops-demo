@@ -10,7 +10,10 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "demo:reset-incidents": "npx tsx scripts/demo-reset-incidents.ts",
+    "demo:worker": ".venv/bin/python backend/python/guest_recovery/run_worker_loop.py",
+    "demo:day": "npm run demo:reset-incidents && npm run demo:worker"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

@@ -57,6 +57,12 @@ interface GuestWithIncidents {
   incidents: IncidentRecord[];
 }
 
+export interface PrioritizedIncident {
+  incident: IncidentRecord;
+  guest: GuestProfile;
+  potential: number;
+}
+
 export interface ActionProposalAction {
   actionId: string;
   label: string;
@@ -207,6 +213,14 @@ export const api = {
   incidents: async (filters?: { severity?: string; status?: string; guestId?: string }) => {
     const rows = await fetchJson<Record<string, unknown>[]>("/api/incidents", filters);
     return rows.map(normalizeIncident);
+  },
+  prioritizedIncidents: async () => {
+    const rows = await fetchJson<Record<string, unknown>[]>('/api/incidents/prioritized');
+    return rows.map((row) => ({
+      incident: normalizeIncident((row.incident as Record<string, unknown>) ?? {}),
+      guest: normalizeGuest((row.guest as Record<string, unknown>) ?? {}),
+      potential: Number(row.potential ?? 0),
+    })) as PrioritizedIncident[];
   },
   excursions: () => fetchJson<Excursion[]>("/api/excursions"),
   venues: () => fetchJson<Venue[]>("/api/venues"),
