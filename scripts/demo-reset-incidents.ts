@@ -140,6 +140,7 @@ async function countDistinctAgentRunIncidents(): Promise<number> {
 
 async function main() {
   await initCouchbase();
+  const shouldRequeue = process.argv.includes('--requeue');
 
   const incidentsExists = await collectionExists('guests', 'incidents');
   const agentRunsExists = await collectionExists('agent', 'agent_runs');
@@ -169,9 +170,11 @@ async function main() {
     const deletedRuns = await purgeCollection('agent', 'agent_runs');
     console.log(`Deleted agent_runs docs: ${deletedRuns}`);
 
-    if (incidentsExists) {
+    if (shouldRequeue && incidentsExists) {
       const requeuedPending = await enqueueAllOpenIncidents();
       console.log(`Requeued guest-recovery pending runs: ${requeuedPending}`);
+    } else if (!shouldRequeue) {
+      console.log('Left agent_runs empty. Use --requeue to enqueue pending runs intentionally.');
     }
   } else {
     console.log('Skipping run cleanup: agent.agent_runs collection does not exist in this cluster.');

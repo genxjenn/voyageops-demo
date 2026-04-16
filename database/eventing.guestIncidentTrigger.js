@@ -44,8 +44,8 @@ function OnUpdate(doc, meta) {
     guestId: doc.guestId,
     incidentId: meta.id,
     status: "pending",
+    lastProcessedStep: "eventing_triggered",
     query: doc.description || "",
-    startedAt: new Date().toISOString(),
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };

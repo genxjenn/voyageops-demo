@@ -152,7 +152,6 @@ const playbookSeeds: PlaybookSeed[] = [
     severity: 'critical',
     loyaltyTier: ['diamond', 'elite platinum'],
     actionIds: [
-      'gr_room_suite_upgrade_comp',
       'gr_suite_upgrade_ultra_vip',
       'gr_priority_cabin_services_vip',
       'gr_concierge_priority_vip',
@@ -195,7 +194,7 @@ const playbookSeeds: PlaybookSeed[] = [
     loyaltyTier: ['diamond', 'elite platinum', 'emerald'],
     actionIds: [
       'gr_luggage_priority_search',
-      'gr_room_suite_upgrade_comp',
+      'gr_bridge_followup_call',
       'gr_concierge_priority_vip',
       'gr_onboard_credit_premium_vip',
       'gr_future_cruise_credit_vip',
@@ -206,6 +205,72 @@ const playbookSeeds: PlaybookSeed[] = [
 ];
 
 const policyRuleSeeds: PolicyRuleSeed[] = [
+  {
+    ruleId: 'pr_gr_tier_suffix_vip_only',
+    agentType: 'guest-recovery',
+    name: 'VIP action suffix enforcement',
+    incidentType: 'service-escalation',
+    severity: 'medium',
+    priority: 130,
+    enabled: true,
+    conditions: {
+      loyaltyTierIn: ['diamond', 'elite platinum'],
+    },
+    directives: {
+      allowActionIdSuffixes: ['_vip', ''],
+      disallowActionIdSuffixes: ['_std'],
+      requireTierSuffixCompliance: true,
+    },
+  },
+  {
+    ruleId: 'pr_gr_tier_suffix_std_only',
+    agentType: 'guest-recovery',
+    name: 'Standard action suffix enforcement',
+    incidentType: 'service-escalation',
+    severity: 'medium',
+    priority: 130,
+    enabled: true,
+    conditions: {
+      loyaltyTierIn: ['gold', 'emerald', 'platinum'],
+    },
+    directives: {
+      allowActionIdSuffixes: ['_std', ''],
+      disallowActionIdSuffixes: ['_vip'],
+      requireTierSuffixCompliance: true,
+    },
+  },
+  {
+    ruleId: 'pr_gr_lost_item_no_room_upgrade_low',
+    agentType: 'guest-recovery',
+    name: 'Lost-item low severity relevance guardrail',
+    incidentType: 'lost-item',
+    severity: 'low',
+    priority: 120,
+    enabled: true,
+    conditions: { incidentTypeEquals: 'lost-item', severityMax: 'low' },
+    directives: {
+      disallowActionIds: ['gr_room_suite_upgrade_comp', 'gr_suite_upgrade_ultra_vip', 'gr_cabin_upgrade_coupon_vip'],
+      disallowActionFamilies: ['room-upgrade', 'suite-upgrade'],
+      preferActionIds: ['gr_luggage_priority_search', 'gr_bridge_followup_call', 'gr_specialty_service_credit_vip'],
+      requireIncidentTypeCategoryFit: true,
+    },
+  },
+  {
+    ruleId: 'pr_gr_lost_item_no_room_upgrade_medium',
+    agentType: 'guest-recovery',
+    name: 'Lost-item medium severity relevance guardrail',
+    incidentType: 'lost-item',
+    severity: 'medium',
+    priority: 120,
+    enabled: true,
+    conditions: { incidentTypeEquals: 'lost-item', severityMax: 'medium' },
+    directives: {
+      disallowActionIds: ['gr_room_suite_upgrade_comp', 'gr_suite_upgrade_ultra_vip', 'gr_cabin_upgrade_coupon_vip'],
+      disallowActionFamilies: ['room-upgrade', 'suite-upgrade'],
+      preferActionIds: ['gr_luggage_priority_search', 'gr_bridge_followup_call', 'gr_specialty_service_credit_vip'],
+      requireIncidentTypeCategoryFit: true,
+    },
+  },
   {
     ruleId: 'pr_gr_budget_medium',
     agentType: 'guest-recovery',

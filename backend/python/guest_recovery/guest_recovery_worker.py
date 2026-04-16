@@ -1,7 +1,6 @@
 import json
 import os
 import sys
-import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -286,7 +285,10 @@ def _fetch_actions_and_policies(cluster: Cluster, playbook_id: str, loyalty_tier
     SELECT a.actionId,
            a.label,
            a.description,
-           a.estimatedValue
+           a.estimatedValue,
+           a.incidentCategory,
+           a.incidentType,
+           a.loyaltyTier
     FROM voyageops.agent.playbooks p
     UNNEST p.actionIds AS aid
     JOIN voyageops.agent.action_catalog a ON aid = a.actionId
@@ -316,6 +318,59 @@ def _fetch_actions_and_policies(cluster: Cluster, playbook_id: str, loyalty_tier
     if not actions:
         raise AgentWorkerError("load_actions", f"No eligible actions found for playbook {playbook_id}")
 
+    def _is_any_tier_value(value: Any) -> bool:
+        if isinstance(value, str):
+            return value.strip().lower() == "any"
+        if isinstance(value, list):
+            normalized = {str(item).strip().lower() for item in value if str(item).strip()}
+            return normalized == {"any"}
+        return False
+
+    # Enforce loyalty-tier suffix constraints at backend (not UI):
+    # 1) loyaltyTier == "any" remains broadly applicable.
+    # 2) *_vip actions are only for DIAMOND / ELITE PLATINUM.
+    # 3) *_std actions are only for GOLD / EMERALD / PLATINUM.
+    # 4) VIP tiers must not receive *_std; standard tiers must not receive *_vip.
+    vip_tiers = {"diamond", "elite platinum"}
+    standard_tiers = {"gold", "emerald", "platinum"}
+    normalized_loyalty_tier = str(loyalty_tier).strip().lower()
+
+    def _action_id(action: Mapping[str, Any]) -> str:
+        return str(action.get("actionId") or "").strip().lower()
+
+    def _is_vip_action(action: Mapping[str, Any]) -> bool:
+        return _action_id(action).endswith("_vip")
+
+    def _is_std_action(action: Mapping[str, Any]) -> bool:
+        return _action_id(action).endswith("_std")
+
+    filtered_by_tier_suffix: list[dict[str, Any]] = []
+    for action in actions:
+        if _is_vip_action(action) and normalized_loyalty_tier not in vip_tiers:
+            continue
+        if _is_std_action(action) and normalized_loyalty_tier not in standard_tiers:
+            continue
+        if normalized_loyalty_tier in vip_tiers and _is_std_action(action):
+            continue
+        if normalized_loyalty_tier in standard_tiers and _is_vip_action(action):
+            continue
+        filtered_by_tier_suffix.append(action)
+
+    actions = filtered_by_tier_suffix
+
+    # For VIP tiers, optionally suppress generic "any" actions when tier-specific alternatives exist.
+    if normalized_loyalty_tier in vip_tiers:
+        tier_specific_action_ids = {
+            action["actionId"] for action in actions if not _is_any_tier_value(action.get("loyaltyTier"))
+        }
+        if tier_specific_action_ids:
+            actions = [action for action in actions if not _is_any_tier_value(action.get("loyaltyTier"))]
+
+    # Remove loyaltyTier from output since it's only needed for filtering
+    for action in actions:
+        if "loyaltyTier" in action:
+            del action["loyaltyTier"]
+
     return actions, policies
 
 
@@ -323,6 +378,8 @@ def _build_prompt(context: Mapping[str, Any], actions: list[dict[str, Any]], pol
     recent_incidents = int(context.get("recentIncidents") or 0)
     loyalty_tier = str(context.get("loyaltyTier") or "GOLD").upper()
     onboard_spend = float(context.get("onboardSpend") or 0)
+    incident_type = str(context.get("type") or "").strip().lower()
+    incident_category = str(context.get("category") or "").strip().lower()
 
     base_budget = min(500.0, max(75.0, round(onboard_spend * 0.06, 2)))
     tier_multiplier = {
@@ -334,12 +391,32 @@ def _build_prompt(context: Mapping[str, Any], actions: list[dict[str, Any]], pol
     }.get(loyalty_tier, 1.0)
     max_recovery_budget = round(base_budget * tier_multiplier, 2)
 
+    def _normalized_text(value: Any) -> str:
+        return str(value or "").strip().lower()
+
     def _action_rank(action: Mapping[str, Any]) -> float:
         estimated = float(action.get("estimatedValue") or 0)
+        action_type = _normalized_text(action.get("incidentType"))
+        action_category = _normalized_text(action.get("incidentCategory"))
+
+        type_match_bonus = 240 if incident_type and action_type == incident_type else 0
+        category_match_bonus = 140 if incident_category and action_category == incident_category else 0
+        mismatch_penalty = -220 if (incident_type and action_type and action_type != incident_type) else 0
+
         in_budget_bonus = 25 if estimated <= max_recovery_budget else -10
         recent_escalation_bonus = 8 if recent_incidents >= 2 else 0
         severity_bonus = 10 if str(context.get("severity", "")).lower() in {"high", "critical"} else 0
-        return estimated + in_budget_bonus + recent_escalation_bonus + severity_bonus
+        value_weight = min(estimated, max_recovery_budget * 1.25)
+
+        return (
+            type_match_bonus
+            + category_match_bonus
+            + mismatch_penalty
+            + in_budget_bonus
+            + recent_escalation_bonus
+            + severity_bonus
+            + value_weight
+        )
 
     ranked_actions = sorted(actions, key=_action_rank, reverse=True)
     shortlist = ranked_actions[: min(5, len(ranked_actions))]
@@ -367,11 +444,13 @@ def _build_prompt(context: Mapping[str, Any], actions: list[dict[str, Any]], pol
                 "onboardSpend": context.get("onboardSpend"),
                 "recentIncidents": context.get("recentIncidents", 0),
             },
-            "eligibleActions": actions,
+            # Constrain model selection to relevance-ranked candidates.
+            "eligibleActions": shortlist,
             "actionShortlist": shortlist,
             "policyRules": policies,
             "task": {
                 "selectExactlyOneAction": True,
+                "requireIncidentTypeCategoryFit": True,
                 "escalateIfRecentIncidentsGte": 2,
                 "targetMaxRecoveryBudget": max_recovery_budget,
                 "responseSchema": {
@@ -421,12 +500,43 @@ def _parse_recommendation(response_content: str, actions: list[dict[str, Any]]) 
         else []
     )
 
+    def _tokenize_action_text(value: str) -> set[str]:
+        normalized = "".join(char.lower() if char.isalnum() else " " for char in value)
+        return {token for token in normalized.split() if token and token not in {"the", "a", "an", "to", "for", "as", "and", "with", "of", "on", "in", "is", "was", "be", "or", "by", "guest", "mr", "stark"}}
+
+    def _is_semantic_duplicate(base: Mapping[str, Any], candidate: Mapping[str, Any]) -> bool:
+        if str(base.get("actionId")) == str(candidate.get("actionId")):
+            return True
+
+        base_text = f"{base.get('label', '')} {base.get('description', '')}".strip()
+        candidate_text = f"{candidate.get('label', '')} {candidate.get('description', '')}".strip()
+        base_tokens = _tokenize_action_text(base_text)
+        candidate_tokens = _tokenize_action_text(candidate_text)
+
+        if not base_tokens or not candidate_tokens:
+            return False
+
+        overlap = len(base_tokens & candidate_tokens)
+        smaller = min(len(base_tokens), len(candidate_tokens))
+        return smaller > 0 and (overlap / smaller) >= 0.7
+
     alternatives: list[dict[str, Any]] = []
+
+    def _already_has_semantic_duplicate(candidate: Mapping[str, Any], existing: list[dict[str, Any]]) -> bool:
+        if _is_semantic_duplicate(selected_action, candidate):
+            return True
+
+        for entry in existing:
+            if _is_semantic_duplicate(entry, candidate):
+                return True
+
+        return False
+
     for action_id in alternative_action_ids:
         if action_id == selected_action["actionId"]:
             continue
         alt = next((action for action in actions if action.get("actionId") == action_id), None)
-        if alt:
+        if alt and not _already_has_semantic_duplicate(alt, alternatives):
             alternatives.append(
                 {
                     "actionId": str(alt["actionId"]),
@@ -439,6 +549,8 @@ def _parse_recommendation(response_content: str, actions: list[dict[str, Any]]) 
     if not alternatives:
         for fallback in actions:
             if fallback.get("actionId") == selected_action["actionId"]:
+                continue
+            if _already_has_semantic_duplicate(fallback, alternatives):
                 continue
             alternatives.append(
                 {
@@ -506,7 +618,10 @@ def _write_proposal(
     run_document: Mapping[str, Any],
     recommendation: Mapping[str, Any],
 ) -> str:
-    proposal_id = f"prop_{uuid.uuid4()}"
+    incident_id = str(run_document["incidentId"])
+    guest_id = str(run_document["guestId"])
+    # Deterministic key prevents duplicate proposal docs for the same incident/guest.
+    proposal_id = f"proposal::guest-recovery::{incident_id}::{guest_id}"
     timestamp = _utc_now_iso()
     proposal_document = {
         "proposalId": proposal_id,

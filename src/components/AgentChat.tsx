@@ -1,31 +1,27 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Send, Bot, User, Sparkles, Loader2, RotateCcw, Copy, Check } from "lucide-react";
+import { Send, Bot, User, Sparkles, Loader2, RotateCcw, Copy, Check, Activity } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import ReactMarkdown from "react-markdown";
-import { guests as mockGuests, incidents as mockIncidents, excursions as mockExcursions, venues as mockVenues, agentRecommendations as mockRecommendations, shipInfo as mockShipInfo } from "@/data/mockData";
+import { guests as mockGuests, incidents as mockIncidents, excursions as mockExcursions, venues as mockVenues, agentRecommendations as mockRecommendations, shipInfo as mockShipInfo, type Guest, type Incident, type Excursion, type Venue, type AgentRecommendation } from "@/data/mockData";
 import { format } from "date-fns";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { api, type GuestProfile, type IncidentRecord, type ShipInfo } from "@/lib/api";
 
 interface ChatMessage {
   id: string;
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "activity";
   content: string;
   timestamp: Date;
   isStreaming?: boolean;
+  activityLevel?: "info" | "success" | "warning" | "error";
 }
 
 interface AgentChatProps {
   agentType?: "guest-recovery" | "port-disruption" | "onboard-ops" | "general";
   className?: string;
   onCommand?: (command: string) => void;
-}
-
-interface VectorQueryMeta {
-  retrievalMode?: string;
-  indexesUsed?: string[];
 }
 
 // ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -91,25 +87,26 @@ const FALLBACK_RESPONSE = "I'm analyzing the available data but couldn't find a 
 // │   Backend can run as Couchbase Eventing Function or external service       │
 // └─────────────────────────────────────────────────────────────────────────────┘
 interface LiveChatData {
-  guests: typeof mockGuests;
-  incidents: typeof mockIncidents;
-  excursions: typeof mockExcursions;
-  venues: typeof mockVenues;
-  recommendations: typeof mockRecommendations;
-  shipInfo: typeof mockShipInfo;
+  guests: Array<Guest | GuestProfile>;
+  incidents: Array<Incident | IncidentRecord>;
+  excursions: Excursion[];
+  venues: Venue[];
+  recommendations: AgentRecommendation[];
+  shipInfo: typeof mockShipInfo | ShipInfo;
 }
 
 function getGuestDisplayName(guest: LiveChatData["guests"][number] | undefined) {
-  return guest?.fullName || guest?.name || "Unknown";
+  if (!guest) return "Unknown";
+  return ("fullName" in guest ? guest.fullName : undefined) || guest.name || "Unknown";
 }
 
 function getIncidentIdentifier(incident: LiveChatData["incidents"][number]) {
-  return incident.incidentId || incident.id || "Unknown";
+  return ("incidentId" in incident ? incident.incidentId : undefined) || incident.id || "Unknown";
 }
 
 function findGuestById(data: LiveChatData, guestId: string | undefined) {
   if (!guestId) return undefined;
-  return data.guests.find(g => g.guestId === guestId || g.id === guestId);
+  return data.guests.find(g => (("guestId" in g ? g.guestId : undefined) === guestId) || g.id === guestId);
 }
 
 function findVenueForIncident(data: LiveChatData, incident: LiveChatData["incidents"][number] | undefined) {
@@ -300,7 +297,7 @@ function CopyButton({ content }: { content: string }) {
 
 export function AgentChat({ agentType = "general", className, onCommand }: AgentChatProps) {
   const guestsQuery = useQuery({ queryKey: ["guests"], queryFn: api.guests });
-  const incidentsQuery = useQuery({ queryKey: ["incidents"], queryFn: api.incidents });
+  const incidentsQuery = useQuery({ queryKey: ["incidents"], queryFn: () => api.incidents() });
   const excursionsQuery = useQuery({ queryKey: ["excursions"], queryFn: api.excursions });
   const venuesQuery = useQuery({ queryKey: ["venues"], queryFn: api.venues });
   const recommendationsQuery = useQuery({
@@ -322,10 +319,60 @@ export function AgentChat({ agentType = "general", className, onCommand }: Agent
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
-  const [vectorMeta, setVectorMeta] = useState<VectorQueryMeta | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const handleSendRef = useRef<(text?: string) => void>(() => {});
+  const seenLogIds = useRef<Set<string>>(new Set());
+
+  // Subscribe to live worker activity via SSE (guest-recovery agent only)
+  useEffect(() => {
+    if (agentType !== "guest-recovery") return;
+
+    const apiBase = import.meta.env.VITE_API_URL ?? "";
+
+    // Seed with recent history before opening the stream
+    fetch(`${apiBase}/api/worker-logs`)
+      .then(r => r.json())
+      .then((entries: Array<{id: string; ts: string; level: string; message: string}>) => {
+        const initial: ChatMessage[] = entries
+          .filter(e => !seenLogIds.current.has(e.id))
+          .map(e => {
+            seenLogIds.current.add(e.id);
+            return {
+              id: `activity-${e.id}`,
+              role: "activity" as const,
+              content: e.message,
+              timestamp: new Date(e.ts),
+              activityLevel: (e.level as ChatMessage["activityLevel"]) ?? "info",
+            };
+          });
+        if (initial.length > 0) {
+          setMessages(prev => [...prev, ...initial]);
+        }
+      })
+      .catch(() => { /* API not up yet */ });
+
+    const sse = new EventSource(`${apiBase}/api/worker-logs/stream`);
+
+    sse.onmessage = (event) => {
+      try {
+        const entry = JSON.parse(event.data);
+        if (entry?.type === "connected" || !entry?.id) return;
+        if (seenLogIds.current.has(entry.id)) return;
+        seenLogIds.current.add(entry.id);
+        const msg: ChatMessage = {
+          id: `activity-${entry.id}`,
+          role: "activity",
+          content: entry.message,
+          timestamp: new Date(entry.ts),
+          activityLevel: entry.level ?? "info",
+        };
+        setMessages(prev => [...prev, msg]);
+      } catch { /* ignore malformed events */ }
+    };
+
+    return () => sse.close();
+  }, [agentType]);
 
   const scrollToBottom = useCallback(() => {
     if (scrollRef.current) {
@@ -387,10 +434,8 @@ export function AgentChat({ agentType = "general", className, onCommand }: Agent
       try {
         const vectorResult = await api.agentQuery(messageText, agentType);
         response = vectorResult.response;
-        setVectorMeta(vectorResult.metadata ?? null);
       } catch {
         response = getAgentResponse(messageText, agentType, liveData);
-        setVectorMeta({ retrievalMode: "local-fallback", indexesUsed: [] });
       }
     } else {
       response = getAgentResponse(messageText, agentType, liveData);
@@ -438,22 +483,6 @@ export function AgentChat({ agentType = "general", className, onCommand }: Agent
           <p className="text-[10px] text-muted-foreground">
             Powered by Couchbase Capella AI Services • Natural Language Interface
           </p>
-          {agentType === "guest-recovery" && vectorMeta?.retrievalMode ? (
-            <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px]">
-              <span className="rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 font-semibold text-primary">
-                Vector Mode: {vectorMeta.retrievalMode}
-              </span>
-              {vectorMeta.indexesUsed && vectorMeta.indexesUsed.length > 0 ? (
-                <span className="rounded-full border border-border bg-background px-2 py-0.5 text-muted-foreground">
-                  {vectorMeta.indexesUsed.length} index{vectorMeta.indexesUsed.length > 1 ? "es" : ""} active
-                </span>
-              ) : (
-                <span className="rounded-full border border-warning/40 bg-warning/10 px-2 py-0.5 text-warning">
-                  fallback active
-                </span>
-              )}
-            </div>
-          ) : null}
         </div>
         <div className="flex items-center gap-1.5">
           <span className="h-2 w-2 rounded-full bg-success animate-pulse" />
@@ -486,7 +515,38 @@ export function AgentChat({ agentType = "general", className, onCommand }: Agent
           </div>
         )}
 
-        {messages.map((msg) => (
+        {messages.map((msg) => {
+          if (msg.role === "activity") {
+            const levelColor: Record<string, string> = {
+              success: "text-success",
+              error: "text-destructive",
+              warning: "text-warning",
+              info: "text-muted-foreground",
+            };
+            const levelDot: Record<string, string> = {
+              success: "bg-success",
+              error: "bg-destructive",
+              warning: "bg-warning",
+              info: "bg-primary/50",
+            };
+            const level = msg.activityLevel ?? "info";
+            return (
+              <div key={msg.id} className="flex gap-2 items-start pl-0.5">
+                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-muted mt-0.5">
+                  <Activity className="h-3.5 w-3.5 text-muted-foreground" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="rounded-lg bg-muted/30 border border-border/40 px-3 py-1.5 font-mono text-[11px] leading-relaxed">
+                    <span className={cn("inline-block w-1.5 h-1.5 rounded-full mr-2 shrink-0 mt-[3px] align-middle", levelDot[level])} />
+                    <span className={cn(levelColor[level])}>{msg.content}</span>
+                  </div>
+                  <span className="text-[10px] text-muted-foreground pl-1">{format(msg.timestamp, "h:mm:ss a")}</span>
+                </div>
+              </div>
+            );
+          }
+
+          return (
           <div key={msg.id} className={cn("flex gap-3 group", msg.role === "user" ? "justify-end" : "justify-start")}>
             {msg.role === "assistant" && (
               <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-primary/10 mt-0.5">
@@ -529,7 +589,8 @@ export function AgentChat({ agentType = "general", className, onCommand }: Agent
               </div>
             )}
           </div>
-        ))}
+          );
+        })}
 
         {isStreaming && messages[messages.length - 1]?.content === "" && (
           <div className="flex gap-3">

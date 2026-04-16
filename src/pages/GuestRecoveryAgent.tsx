@@ -102,6 +102,118 @@ function getSeverityPriority(severity: string | undefined) {
   return order[normalized] ?? 0;
 }
 
+function buildChatAdjustedProposal(
+  proposal: ActionProposal | undefined,
+  incident: IncidentRecord | undefined,
+  command: string | null,
+): ActionProposal | null {
+  if (!proposal || !command) {
+    return null;
+  }
+
+  const normalized = command.toLowerCase();
+  const nextActions = proposal.actions.map((action) => ({ ...action }));
+  const alternativeActions = proposal.interactive?.alternativeActions?.map((action) => ({ ...action })) ?? [];
+  const followUpQuestions = [...(proposal.interactive?.followUpQuestions ?? [])];
+  const adjustmentNotes: string[] = [];
+  let priority = proposal.priority ?? "medium";
+  let operatorMessage = proposal.interactive?.operatorMessage ?? proposal.summary ?? "Plan adjusted from operator feedback.";
+
+  const cheapestAlternative = alternativeActions
+    .slice()
+    .sort((a, b) => Number(a.estimatedValue ?? 0) - Number(b.estimatedValue ?? 0))[0];
+  const richestAlternative = alternativeActions
+    .slice()
+    .sort((a, b) => Number(b.estimatedValue ?? 0) - Number(a.estimatedValue ?? 0))[0];
+
+  if (/(urgent|asap|immediately|right now|expedite|fast)/.test(normalized)) {
+    priority = "high";
+    operatorMessage = "Operator asked for a faster, higher-touch recovery path.";
+    followUpQuestions.unshift("Can guest services contact the guest in the next 10 minutes to confirm the updated recovery plan?");
+    adjustmentNotes.push("escalated service speed");
+  }
+
+  const wantsLowerCost = /(budget|cheaper|cheapest|lower\s+cost|cost\s+lower|lower\s+the\s+cost|keep\s+the\s+cost\s+lower|less\s+expensive|less\s+credit|smaller\s+gesture|keep\s+costs\s+down)/.test(normalized);
+  const incidentLooksMinorLostItem = Boolean(
+    incident &&
+    String(incident.type).toLowerCase().includes("lost") &&
+    ["low", "medium"].includes(String(incident.severity).toLowerCase()),
+  );
+
+  if (wantsLowerCost) {
+    if (incidentLooksMinorLostItem) {
+      nextActions.splice(
+        0,
+        nextActions.length,
+        {
+          actionId: "demo_lost_item_search",
+          label: "Focused lost-item search and location sweep",
+          description: "Demo-only lower-cost adjustment for a minor lost-item case. Prioritizes operations follow-up before compensation.",
+          estimatedValue: 0,
+        },
+        {
+          actionId: "demo_guest_update",
+          label: "Proactive guest update within 30 minutes",
+          description: "Manual guest communication step added from chat guidance to keep the recovery practical and proportional.",
+          estimatedValue: 0,
+        },
+      );
+    } else if (cheapestAlternative) {
+      nextActions.splice(0, nextActions.length, {
+        ...cheapestAlternative,
+        description: `${cheapestAlternative.description ?? ""} Adjusted after operator requested a lower-cost alternative.`.trim(),
+      });
+    }
+    adjustmentNotes.push("swapped in a lower-cost alternative");
+  }
+
+  if (/(vip|upgrade|more generous|white glove|concierge|personal|premium)/.test(normalized) && richestAlternative) {
+    const alreadyIncluded = nextActions.some((action) => action.actionId === richestAlternative.actionId);
+    if (!alreadyIncluded) {
+      nextActions.push({
+        ...richestAlternative,
+        description: `${richestAlternative.description ?? ""} Added as a premium operator-requested option.`.trim(),
+      });
+    }
+    adjustmentNotes.push("added a premium option");
+  }
+
+  if (/(call|phone|outreach|follow up|follow-up|speak to|personal apology)/.test(normalized)) {
+    nextActions.push({
+      actionId: "demo_supervisor_follow_up",
+      label: "Supervisor follow-up call",
+      description: "Demo-only operator refinement showing a manual outreach step added from chat feedback.",
+      estimatedValue: 0,
+    });
+    followUpQuestions.unshift("Who should make the call, and what service recovery commitment should be confirmed live with the guest?");
+    adjustmentNotes.push("added a manual outreach step");
+  }
+
+  if (adjustmentNotes.length === 0) {
+    return null;
+  }
+
+  const summaryBase = proposal.summary ?? "Recovery plan ready for review";
+  const summary = `${summaryBase} Chat-adjusted: ${adjustmentNotes.join(", ")}.`;
+  const reasoning = `${proposal.reasoning ?? ""} Operator chat requested a refinement, so this demo preview ${adjustmentNotes.join(", ")} while keeping the worker-generated proposal intact.`.trim();
+
+  return {
+    ...proposal,
+    proposalId: `${proposal.proposalId}::chat-preview`,
+    summary,
+    reasoning,
+    priority,
+    actions: nextActions,
+    interactive: {
+      ...proposal.interactive,
+      operatorMessage,
+      followUpQuestions: followUpQuestions.slice(0, 4),
+      alternativeActions,
+    },
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 // ┌─────────────────────────────────────────────────────────────────────────────┐
 // │ COUCHBASE INTEGRATION: Guest Recovery Agent Data                           │
 // │                                                                             │
@@ -134,12 +246,12 @@ const GuestRecoveryAgent = () => {
   };
 
   const [selectedGuestId, setSelectedGuestId] = useState("");
+  const [lastAdjustmentPrompt, setLastAdjustmentPrompt] = useState<string | null>(null);
   
   const guestsQuery = useQuery({ queryKey: ["guests"], queryFn: api.guests });
   const guests = guestsQuery.data ?? [];
   
   const incidentsQuery = useQuery({ queryKey: ["incidents", selectedGuestId], queryFn: () => api.incidents({ guestId: selectedGuestId }), enabled: Boolean(selectedGuestId) });
-  const proposalsQuery = useQuery({ queryKey: ["proposals", selectedGuestId], queryFn: () => api.actionProposals(selectedGuestId), enabled: Boolean(selectedGuestId), refetchInterval: 10000 });
   const prioritizedIncidentsQuery = useQuery({ queryKey: ["incidents", "prioritized", "guest-recovery"], queryFn: api.prioritizedIncidents });
   const venuesQuery = useQuery({ queryKey: ["venues"], queryFn: api.venues });
 
@@ -158,6 +270,13 @@ const GuestRecoveryAgent = () => {
       const updatedB = parseTimestamp(b.updatedAt).getTime();
       return updatedB - updatedA;
     })[0] ?? incidents[0];
+  const incidentIdForProposal = incident ? getIncidentIdentifier(incident) : undefined;
+  const proposalsQuery = useQuery({
+    queryKey: ["proposals", selectedGuestId, incidentIdForProposal],
+    queryFn: () => api.actionProposals(selectedGuestId, incidentIdForProposal),
+    enabled: Boolean(selectedGuestId && incidentIdForProposal),
+    refetchInterval: 10000,
+  });
 
   const topGuestIds = Array.from(
     new Set(
@@ -179,6 +298,11 @@ const GuestRecoveryAgent = () => {
 
   const guest = findGuestById(guests, selectedGuestId) ?? topGuestOptions[0]?.guest ?? guests[0] ?? EMPTY_GUEST;
   const selectedProposal = (proposalsQuery.data ?? [])[0];
+  const adjustedProposalPreview = buildChatAdjustedProposal(selectedProposal, incident, lastAdjustmentPrompt);
+  const displayProposal = adjustedProposalPreview ?? selectedProposal;
+  const visibleProposals = adjustedProposalPreview
+    ? [adjustedProposalPreview, ...(proposalsQuery.data ?? []).slice(1)]
+    : (proposalsQuery.data ?? []);
   const scenarioVenue = incident?.description
     ? venues.find(venue => incident.description.toLowerCase().includes(String(venue.name).toLowerCase()))
     : undefined;
@@ -188,14 +312,14 @@ const GuestRecoveryAgent = () => {
   const staffingGapPct = scenarioVenue && scenarioVenue.optimalStaff > 0
     ? Math.max(0, Math.round(((scenarioVenue.optimalStaff - scenarioVenue.staffCount) / scenarioVenue.optimalStaff) * 100))
     : undefined;
-  const actionValue = selectedProposal?.actions.reduce((sum, action) => sum + (action.estimatedValue ?? 0), 0) ?? 0;
+  const actionValue = displayProposal?.actions.reduce((sum, action) => sum + (action.estimatedValue ?? 0), 0) ?? 0;
   const spendValue = Number(guest?.onboardSpend ?? 0);
   const protectedValue = Math.round((spendValue + actionValue) * getLoyaltyValueMultiplier(guest?.loyaltyTier));
   const venueRisk = scenarioVenue?.status === "overloaded" ? 8 : scenarioVenue?.status === "busy" ? 4 : 0;
   const beforeRisk = Math.min(48, getSeverityRisk(incident?.severity) + venueRisk + (String(guest?.loyaltyTier).toUpperCase() === "PLATINUM" ? 10 : 0) + (String(guest?.loyaltyTier).toUpperCase() === "DIAMOND" ? 12 : 0));
-  const actionCount = selectedProposal?.actions.length ?? 0;
+  const actionCount = displayProposal?.actions.length ?? 0;
   const afterRisk = Math.max(4, beforeRisk - Math.min(12, actionCount * 2));
-  const actionLabels = selectedProposal?.actions.map(action => action.label).join(", ") ?? "No proposed actions available.";
+  const actionLabels = displayProposal?.actions.map(action => action.label).join(", ") ?? "No proposed actions available.";
 
   const handleChatCommand = (command: string) => {
     const normalized = command.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
@@ -209,7 +333,15 @@ const GuestRecoveryAgent = () => {
     if (nextSelectedGuestId && nextSelectedGuestId !== selectedGuestId) {
       setSelectedGuestId(nextSelectedGuestId);
     }
+
+    if (/(adjust|change|refine|update|swap|replace|upgrade|downgrade|vip|budget|cheaper|cheapest|lower|cost|call|follow up|follow-up|personal|expedite|urgent)/.test(normalized)) {
+      setLastAdjustmentPrompt(command);
+    }
   };
+
+  useEffect(() => {
+    setLastAdjustmentPrompt(null);
+  }, [selectedGuestId]);
 
   return (
     <div className="p-6 space-y-6 max-w-[1400px] mx-auto">
@@ -386,10 +518,22 @@ const GuestRecoveryAgent = () => {
             <div className="text-xs text-muted-foreground space-y-2 leading-relaxed">
               <p><strong className="text-foreground">Trigger:</strong> {incident ? `${getGuestDisplayName(guest)} was linked to ${incident.type.toLowerCase()} in ${incident.category}. ${incident.description}` : `No active incident is currently associated with ${getGuestDisplayName(guest)}.`}</p>
               <p><strong className="text-foreground">Analysis:</strong> The agent correlated booking {guest?.bookingId ?? "Unknown"}, loyalty tier {guest?.loyaltyTier ?? "Unknown"}, sailing history {typeof guest?.sailingHistory === "number" ? `${guest.sailingHistory} voyages` : "Unknown"}, and onboard spend {formatCurrency(guest?.onboardSpend)}{scenarioVenue ? ` with ${scenarioVenue.name} operating at ${occupancyPct}% capacity${staffingGapPct ? ` and ${staffingGapPct}% understaffing` : ""}${typeof scenarioVenue.waitTime === "number" ? ` plus a ${scenarioVenue.waitTime}-minute wait time` : ""}` : ""}.</p>
-              <p><strong className="text-foreground">Recovery Plan:</strong> {selectedProposal ? `${selectedProposal.actions.length}-action plan from worker proposal ${selectedProposal.proposalId}: ${actionLabels}.` : "No worker-generated action proposal is currently available for this guest."}</p>
-              <p><strong className="text-foreground">Outcome:</strong> {selectedProposal ? `Estimated ${formatCurrency(protectedValue)} in future value protected. Churn risk reduced from ${beforeRisk}% to ${afterRisk}% based on current guest value, incident severity, and the proposed actions.` : `Outcome cannot be estimated until a worker proposal is available.`}</p>
+              <p><strong className="text-foreground">Recovery Plan:</strong> {displayProposal ? `${displayProposal.actions.length}-action plan ${adjustedProposalPreview ? `previewed from chat feedback on worker proposal ${selectedProposal?.proposalId}` : `from worker proposal ${displayProposal.proposalId}`}: ${actionLabels}.` : "No worker-generated action proposal is currently available for this guest."}</p>
+              <p><strong className="text-foreground">Outcome:</strong> {displayProposal ? `Estimated ${formatCurrency(protectedValue)} in future value protected. Churn risk reduced from ${beforeRisk}% to ${afterRisk}% based on current guest value, incident severity, and the proposed actions.` : `Outcome cannot be estimated until a worker proposal is available.`}</p>
             </div>
           </div>
+
+          {adjustedProposalPreview && lastAdjustmentPrompt && (
+            <div className="rounded-lg border border-warning/30 bg-warning/5 p-4">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-warning">Chat-Adjusted Demo Preview</p>
+              <p className="mt-2 text-xs text-muted-foreground leading-relaxed">
+                Latest prompt: <strong className="text-foreground">{lastAdjustmentPrompt}</strong>
+              </p>
+              <p className="mt-2 text-xs text-muted-foreground leading-relaxed">
+                This preview shows how operator chat can refine the worker-generated plan without changing the stored Couchbase proposal until approval/execution logic is added.
+              </p>
+            </div>
+          )}
 
           {proposalsQuery.isLoading && (
             <div className="rounded-lg border border-border bg-card p-4">
@@ -405,11 +549,11 @@ const GuestRecoveryAgent = () => {
             </div>
           )}
 
-          {(proposalsQuery.data ?? []).map((proposal: ActionProposal) => (
+          {visibleProposals.map((proposal: ActionProposal) => (
             <div key={proposal.proposalId} className="rounded-lg border border-border bg-card p-4">
               <div className="flex items-start justify-between gap-2 mb-3">
                 <div className="min-w-0 flex-1">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Agent Proposal</p>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{proposal.proposalId.includes("::chat-preview") ? "Chat-Adjusted Preview" : "Agent Proposal"}</p>
                   <p className="mt-1 text-sm font-medium text-foreground leading-snug">{proposal.summary ?? "Recovery plan ready for review"}</p>
                 </div>
                 <StatusBadge status={proposal.status as any} />

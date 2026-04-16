@@ -1,8 +1,82 @@
 // src/api/routes.ts
 import express from 'express';
+import type { Response } from 'express';
 import { db } from '../lib/couchbase.ts';
 
 const router = express.Router();
+
+// ── Worker activity log (in-memory ring buffer + SSE broadcast) ──────────────
+
+const WORKER_LOG_MAX = 150;
+
+interface WorkerLogEntry {
+  id: string;
+  ts: string;
+  level: 'info' | 'success' | 'warning' | 'error';
+  message: string;
+  runId?: string;
+  proposalId?: string;
+  step?: string;
+}
+
+const workerLogs: WorkerLogEntry[] = [];
+const sseClients = new Set<Response>();
+
+function broadcastLog(entry: WorkerLogEntry) {
+  const payload = `data: ${JSON.stringify(entry)}\n\n`;
+  for (const client of sseClients) {
+    try { client.write(payload); } catch { /* client disconnected */ }
+  }
+}
+
+// POST /api/worker-logs  — called by the Python worker
+router.post('/worker-logs', (req, res) => {
+  const { level = 'info', message, runId, proposalId, step } = req.body ?? {};
+  if (!message) return res.status(400).json({ error: 'message required' });
+
+  const entry: WorkerLogEntry = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    ts: new Date().toISOString(),
+    level,
+    message: String(message),
+    ...(runId && { runId: String(runId) }),
+    ...(proposalId && { proposalId: String(proposalId) }),
+    ...(step && { step: String(step) }),
+  };
+
+  workerLogs.push(entry);
+  if (workerLogs.length > WORKER_LOG_MAX) workerLogs.shift();
+  broadcastLog(entry);
+
+  return res.status(201).json({ ok: true });
+});
+
+// GET /api/worker-logs  — fetch recent history (initial load)
+router.get('/worker-logs', (_req, res) => {
+  res.json(workerLogs.slice(-50));
+});
+
+// GET /api/worker-logs/stream  — SSE stream for live activity feed
+router.get('/worker-logs/stream', (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+
+  // Replay last 50 entries so the UI hydrates immediately on (re)connect.
+  for (const entry of workerLogs.slice(-50)) {
+    res.write(`data: ${JSON.stringify(entry)}\n\n`);
+  }
+
+  res.write('data: {"type":"connected"}\n\n');
+  sseClients.add(res);
+
+  req.on('close', () => {
+    sseClients.delete(res);
+  });
+});
 
 function getRequiredEnv(name: string): string {
   const value = process.env[name];
@@ -95,6 +169,92 @@ function cosineSimilarity(a: number[], b: number[]) {
 
   const denom = Math.sqrt(normA) * Math.sqrt(normB);
   return denom > 0 ? dot / denom : 0;
+}
+
+function formatCurrency(value: unknown) {
+  const numeric = Number(value ?? 0);
+  if (!Number.isFinite(numeric)) {
+    return '$0';
+  }
+
+  return numeric.toLocaleString('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    maximumFractionDigits: 0,
+  });
+}
+
+function buildGuestRecoveryChatResponse(params: {
+  query: string;
+  incidents: any[];
+  guestsById: Map<string, any>;
+  retrievalMode: 'vector-index' | 'vector-fallback';
+  proposal?: any;
+}) {
+  const { query, incidents, guestsById, proposal } = params;
+  const primaryIncident = incidents[0];
+
+  if (!primaryIncident) {
+    return [
+      '### Guest Recovery Assessment',
+      '',
+      `I did not find a strong guest-recovery match for _${query}_.`,
+      '',
+      'Try asking about a guest name, a recovery preference, or an incident type so I can ground the recommendation in a live case.',
+    ].join('\n');
+  }
+
+  const guest = guestsById.get(primaryIncident.guestId);
+  const guestName = guest?.fullName || guest?.name || primaryIncident.guestId || 'Unknown guest';
+  const severity = String(primaryIncident.severity || 'unknown').toUpperCase();
+  const loyaltyTier = String(guest?.loyaltyTier || 'GOLD').toUpperCase();
+  const spend = formatCurrency(guest?.onboardSpend ?? 0);
+  const topThemes = Array.from(new Set(incidents.slice(0, 3).map((incident) => `${incident.type || 'unknown'} / ${incident.category || 'unknown'}`)));
+  const operatorIntent: string[] = [];
+  const normalizedQuery = query.toLowerCase();
+
+  if (/(budget|cheaper|lower|cost|smaller gesture|less expensive)/.test(normalizedQuery)) {
+    operatorIntent.push('keep compensation proportional and cost-aware');
+  }
+  if (/(vip|upgrade|premium|concierge|white glove|personal)/.test(normalizedQuery)) {
+    operatorIntent.push('raise the service level for a higher-touch recovery');
+  }
+  if (/(urgent|fast|expedite|immediately|asap)/.test(normalizedQuery)) {
+    operatorIntent.push('accelerate outreach and service recovery timing');
+  }
+  if (/(call|follow up|follow-up|apology|contact)/.test(normalizedQuery)) {
+    operatorIntent.push('add a direct human follow-up step');
+  }
+
+  const currentPlan = proposal?.actions?.length
+    ? proposal.actions.map((action: any) => `- ${action.label}${action.estimatedValue ? ` (${formatCurrency(action.estimatedValue)})` : ''}`).join('\n')
+    : '- No worker-generated proposal exists yet for this incident.';
+
+  const reasoningBullets = [
+    `Guest value context: ${guestName} is ${loyaltyTier} with approximately ${spend} in onboard spend.`,
+    `Incident urgency: ${severity} severity ${primaryIncident.type || 'incident'} in ${primaryIncident.category || 'unknown category'}.`,
+    topThemes.length > 0 ? `Comparable patterns retrieved: ${topThemes.join('; ')}.` : null,
+    operatorIntent.length > 0 ? `Operator guidance detected: ${operatorIntent.join('; ')}.` : 'No refinement preference was stated, so I would keep the current service-recovery posture.',
+  ].filter(Boolean);
+
+  const nextMove = operatorIntent.length > 0
+    ? `If you want, I can refine the visible plan toward these goals: ${operatorIntent.join('; ')}.`
+    : 'If you want to steer the plan, ask for a lower-cost, faster, or more VIP-style recovery and I will adapt the recommendation framing.';
+
+  return [
+    '### Guest Recovery Assessment',
+    '',
+    `I am focusing on **${guestName}** and incident **${primaryIncident.incidentId || primaryIncident.id || primaryIncident.docId || 'unknown'}**.`,
+    '',
+    '**What I am weighing**',
+    reasoningBullets.map((bullet) => `- ${bullet}`).join('\n'),
+    '',
+    '**Current plan on file**',
+    currentPlan,
+    '',
+    '**How I would adjust it**',
+    nextMove,
+  ].join('\n');
 }
 
 async function getQueryEmbedding(query: string) {
@@ -540,23 +700,29 @@ router.post('/agent-query', async (req, res) => {
       });
     }
 
-    const lines = incidents.map((incident: any, idx: number) => {
-      const guest = guestsById.get(incident.guestId);
-      const guestName = guest?.fullName || guest?.name || incident.guestId || 'Unknown guest';
-      const incidentId = incident.incidentId || incident.id || incident.docId || `incident-${idx + 1}`;
-      const score = typeof incident.vectorScore === 'number' ? incident.vectorScore.toFixed(4) : 'n/a';
-      return `${idx + 1}. **${incidentId}** | ${String(incident.severity || 'unknown').toUpperCase()} | ${guestName}\n   ${incident.type || 'Unknown type'}: ${incident.category || 'Unknown category'}\n   ${incident.description || 'No description'}\n   Similarity: ${score}`;
-    });
+    const topIncidentId = incidents[0]?.incidentId || incidents[0]?.id || incidents[0]?.docId;
+    let proposal: any | undefined;
+    if (topIncidentId) {
+      const proposalResult = await db.cluster.query(
+        `
+        SELECT p.*
+        FROM voyageops.agent.action_proposals p
+        WHERE p.incidentId = $incidentId
+        ORDER BY p.createdAt DESC
+        LIMIT 1
+        `,
+        { parameters: { incidentId: topIncidentId }, timeout: 10000 },
+      );
+      proposal = proposalResult.rows[0];
+    }
 
-    const response = [
-      `### Vector Retrieval Results`,
-      ``,
-      `Query: _${query}_`,
-      `Retrieval mode: **${retrievalMode}**`,
-      successfulIndexes.length > 0 ? `Vector indexes used: ${successfulIndexes.join(', ')}` : `Vector indexes used: none (fallback computed from stored vectors)`,
-      ``,
-      lines.length > 0 ? lines.join('\n\n') : `No semantically similar incidents were found.`,
-    ].join('\n');
+    const response = buildGuestRecoveryChatResponse({
+      query,
+      incidents,
+      guestsById,
+      retrievalMode,
+      proposal,
+    });
 
     res.json({
       response,
