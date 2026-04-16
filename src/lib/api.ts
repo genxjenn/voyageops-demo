@@ -104,10 +104,36 @@ interface AgentQueryResponse {
   };
 }
 
+function parseVoyageNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.max(0, Math.floor(value));
+  }
+
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const matches = value.match(/\d+/g);
+  if (!matches || matches.length === 0) {
+    return undefined;
+  }
+
+  const parsed = matches
+    .map((segment) => Number.parseInt(segment, 10))
+    .filter((num) => Number.isFinite(num));
+
+  if (parsed.length === 0) {
+    return undefined;
+  }
+
+  return Math.max(...parsed);
+}
+
 function normalizeGuest(guest: Record<string, unknown>): GuestProfile {
   const guestId = String(guest.guestId ?? guest.id ?? "");
   const fullName = String(guest.fullName ?? guest.name ?? "Unknown guest");
   const loyaltyTier = String(guest.loyaltyTier ?? "GOLD").toUpperCase();
+  const sailingHistory = parseVoyageNumber(guest.sailingHistory);
 
   return {
     guestId,
@@ -119,7 +145,7 @@ function normalizeGuest(guest: Record<string, unknown>): GuestProfile {
     cabinNumber: String(guest.cabinNumber ?? "Unknown"),
     bookingId: String(guest.bookingId ?? "Unknown"),
     onboardSpend: Number(guest.onboardSpend ?? 0),
-    sailingHistory: typeof guest.sailingHistory === "number" ? guest.sailingHistory : undefined,
+    sailingHistory,
     sailingHistoryAvg: typeof guest.sailingHistoryAvg === "number" ? guest.sailingHistoryAvg : undefined,
     notes: guest.notes ? String(guest.notes) : undefined,
     email: guest.email ? String(guest.email) : undefined,

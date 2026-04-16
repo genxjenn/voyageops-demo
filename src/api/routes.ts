@@ -420,7 +420,17 @@ router.get('/dashboard/kpis', async (req, res) => {
 // API: Guest by ID (with incidents)
 router.get('/guests', async (req, res) => {
   try {
-    const q = `SELECT g.* FROM voyageops.guests.guests g ORDER BY g.name ASC`;
+    const q = `
+      SELECT
+        g.*,
+        (
+          SELECT RAW b.voyageNumber
+          FROM voyageops.guests.bookings b
+          WHERE b.guestId = g.guestId
+        ) AS voyageNumbers
+      FROM voyageops.guests.guests g
+      ORDER BY g.name ASC
+    `;
     const result = await db.cluster.query(q);
     res.json(result.rows);
   } catch (error) {

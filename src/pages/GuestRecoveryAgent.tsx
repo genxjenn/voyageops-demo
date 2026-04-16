@@ -272,9 +272,9 @@ const GuestRecoveryAgent = () => {
     })[0] ?? incidents[0];
   const incidentIdForProposal = incident ? getIncidentIdentifier(incident) : undefined;
   const proposalsQuery = useQuery({
-    queryKey: ["proposals", selectedGuestId, incidentIdForProposal],
-    queryFn: () => api.actionProposals(selectedGuestId, incidentIdForProposal),
-    enabled: Boolean(selectedGuestId && incidentIdForProposal),
+    queryKey: ["proposals", selectedGuestId],
+    queryFn: () => api.actionProposals(selectedGuestId),
+    enabled: Boolean(selectedGuestId),
     refetchInterval: 10000,
   });
 
@@ -297,12 +297,31 @@ const GuestRecoveryAgent = () => {
   }, [selectedGuestId, topGuestIds]);
 
   const guest = findGuestById(guests, selectedGuestId) ?? topGuestOptions[0]?.guest ?? guests[0] ?? EMPTY_GUEST;
-  const selectedProposal = (proposalsQuery.data ?? [])[0];
+  const openIncidentIds = new Set(nonClosedIncidents.map((inc) => getIncidentIdentifier(inc)));
+  const openIncidentProposals = (proposalsQuery.data ?? []).filter((proposal) => openIncidentIds.has(proposal.incidentId));
+  const selectedProposal = incidentIdForProposal
+    ? openIncidentProposals.find((proposal) => proposal.incidentId === incidentIdForProposal) ?? openIncidentProposals[0]
+    : openIncidentProposals[0];
   const adjustedProposalPreview = buildChatAdjustedProposal(selectedProposal, incident, lastAdjustmentPrompt);
   const displayProposal = adjustedProposalPreview ?? selectedProposal;
   const visibleProposals = adjustedProposalPreview
-    ? [adjustedProposalPreview, ...(proposalsQuery.data ?? []).slice(1)]
-    : (proposalsQuery.data ?? []);
+    ? [
+      adjustedProposalPreview,
+      ...openIncidentProposals.filter((proposal) => proposal.proposalId !== selectedProposal?.proposalId),
+    ]
+    : openIncidentProposals;
+  const incidentSeverityById = new Map(
+    incidents.map((inc) => [getIncidentIdentifier(inc), String(inc.severity ?? "unknown").toLowerCase()]),
+  );
+  const severityOrder = ["critical", "high", "medium", "low", "unknown"] as const;
+  const proposalsBySeverity = severityOrder
+    .map((severity) => ({
+      severity,
+      proposals: visibleProposals.filter(
+        (proposal) => (incidentSeverityById.get(proposal.incidentId) ?? "unknown") === severity,
+      ),
+    }))
+    .filter((group) => group.proposals.length > 0);
   const scenarioVenue = incident?.description
     ? venues.find(venue => incident.description.toLowerCase().includes(String(venue.name).toLowerCase()))
     : undefined;
@@ -410,7 +429,7 @@ const GuestRecoveryAgent = () => {
               </div>
               <div className="rounded bg-muted p-2">
                 <span className="text-muted-foreground flex items-center gap-1"><Ship className="h-3 w-3" />Sailing History</span>
-                <p className="font-medium text-foreground">{guest.sailingHistory ?? guest.sailingHistoryAvg ?? "Unknown"} voyages</p>
+                <p className="font-medium text-foreground">{typeof guest.sailingHistory === "number" ? guest.sailingHistory : "Unknown"} voyages</p>
               </div>
             </div>
             <div className="mt-3 rounded bg-muted p-2 text-xs">
@@ -541,60 +560,72 @@ const GuestRecoveryAgent = () => {
             </div>
           )}
 
-          {!proposalsQuery.isLoading && (proposalsQuery.data ?? []).length === 0 && (
+          {!proposalsQuery.isLoading && visibleProposals.length === 0 && (
             <div className="rounded-lg border border-border bg-card p-4">
               <p className="text-xs text-muted-foreground leading-relaxed">
-                No agent proposals have been generated for this guest yet. The worker creates a proposal automatically once a pending run is processed for this guest's incident.
+                No agent proposals have been generated for this guest's open incidents yet. The worker creates one proposal per pending run (incident) once processed.
               </p>
             </div>
           )}
 
-          {visibleProposals.map((proposal: ActionProposal) => (
-            <div key={proposal.proposalId} className="rounded-lg border border-border bg-card p-4">
-              <div className="flex items-start justify-between gap-2 mb-3">
-                <div className="min-w-0 flex-1">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{proposal.proposalId.includes("::chat-preview") ? "Chat-Adjusted Preview" : "Agent Proposal"}</p>
-                  <p className="mt-1 text-sm font-medium text-foreground leading-snug">{proposal.summary ?? "Recovery plan ready for review"}</p>
-                </div>
-                <StatusBadge status={proposal.status as any} />
+          {proposalsBySeverity.map(({ severity, proposals }) => (
+            <div key={severity} className="space-y-3">
+              <div className="flex items-center gap-2">
+                <StatusBadge status={severity as any} />
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  {severity} severity incidents ({proposals.length})
+                </p>
               </div>
 
-              {proposal.reasoning && (
-                <p className="text-xs text-muted-foreground leading-relaxed mb-3 border-l-2 border-primary/30 pl-2">{proposal.reasoning}</p>
-              )}
-
-              <div className="space-y-2">
-                {proposal.actions.map((action, index) => (
-                  <div key={action.actionId} className="rounded-lg border border-border bg-muted/30 p-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0 flex-1">
-                        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Action {index + 1}</p>
-                        <p className="mt-1 text-sm font-medium text-foreground">{action.label}</p>
-                        {action.description && (
-                          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{action.description}</p>
-                        )}
-                        {action.estimatedValue ? (
-                          <p className="mt-2 text-xs font-medium text-foreground">Estimated value: {formatCurrency(action.estimatedValue)}</p>
-                        ) : null}
-                      </div>
-                      <Button type="button" size="sm" className="shrink-0" onClick={() => undefined}>
-                        APPROVE
-                      </Button>
+              {proposals.map((proposal: ActionProposal) => (
+                <div key={proposal.proposalId} className="rounded-lg border border-border bg-card p-4">
+                  <div className="flex items-start justify-between gap-2 mb-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{proposal.proposalId.includes("::chat-preview") ? "Chat-Adjusted Preview" : "Agent Proposal"}</p>
+                      <p className="mt-1 text-[11px] font-mono text-muted-foreground">Incident: {proposal.incidentId}</p>
+                      <p className="mt-1 text-sm font-medium text-foreground leading-snug">{proposal.summary ?? "Recovery plan ready for review"}</p>
                     </div>
+                    <StatusBadge status={proposal.status as any} />
                   </div>
-                ))}
-              </div>
 
-              {proposal.interactive?.followUpQuestions && proposal.interactive.followUpQuestions.length > 0 && (
-                <div className="mt-3 pt-3 border-t border-border">
-                  <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Follow-up Questions</p>
-                  <ul className="space-y-1">
-                    {proposal.interactive.followUpQuestions.map((q, i) => (
-                      <li key={i} className="text-xs text-muted-foreground leading-relaxed">• {q}</li>
+                  {proposal.reasoning && (
+                    <p className="text-xs text-muted-foreground leading-relaxed mb-3 border-l-2 border-primary/30 pl-2">{proposal.reasoning}</p>
+                  )}
+
+                  <div className="space-y-2">
+                    {proposal.actions.map((action, index) => (
+                      <div key={action.actionId} className="rounded-lg border border-border bg-muted/30 p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0 flex-1">
+                            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Action {index + 1}</p>
+                            <p className="mt-1 text-sm font-medium text-foreground">{action.label}</p>
+                            {action.description && (
+                              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{action.description}</p>
+                            )}
+                            {action.estimatedValue ? (
+                              <p className="mt-2 text-xs font-medium text-foreground">Estimated value: {formatCurrency(action.estimatedValue)}</p>
+                            ) : null}
+                          </div>
+                          <Button type="button" size="sm" className="shrink-0" onClick={() => undefined}>
+                            APPROVE
+                          </Button>
+                        </div>
+                      </div>
                     ))}
-                  </ul>
+                  </div>
+
+                  {proposal.interactive?.followUpQuestions && proposal.interactive.followUpQuestions.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-border">
+                      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Follow-up Questions</p>
+                      <ul className="space-y-1">
+                        {proposal.interactive.followUpQuestions.map((q, i) => (
+                          <li key={i} className="text-xs text-muted-foreground leading-relaxed">• {q}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </div>
-              )}
+              ))}
             </div>
           ))}
 
