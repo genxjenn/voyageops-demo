@@ -1,9 +1,8 @@
 import { KPICard } from "@/components/KPICard";
 import { StatusBadge } from "@/components/StatusBadge";
-import { RecommendationCard } from "@/components/RecommendationCard";
 import { SatisfactionTrendsChart, RevenueProtectedChart, AgentConfidenceChart } from "@/components/DashboardCharts";
 import { dashboardKPIs, shipInfo as mockShipInfo, incidents as mockIncidents, agentRecommendations as mockRecommendations, excursions as mockExcursions, venues as mockVenues } from "@/data/mockData";
-import { Ship, MapPin, Users, Anchor, Cloud, Waves, AlertTriangle, ArrowRight } from "lucide-react";
+import { Ship, MapPin, Users, Anchor, Cloud, Waves, AlertTriangle, ArrowRight, DollarSign, Clock, TrendingUp } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useLiveDashboardData } from "@/lib/api";
 
@@ -40,10 +39,18 @@ const Dashboard = () => {
   const liveVenues = venuesQuery.data ?? mockVenues;
   const liveRecommendations = recommendationsQuery.data ?? mockRecommendations;
 
-  const pendingRecs = liveRecommendations.filter(r => r.status === "pending" || r.status === "reviewing");
   const activeIncidents = liveIncidents.filter(i => i.status !== "closed");
   const disruptedExcursions = liveExcursions.filter(e => e.status === "disrupted" || e.status === "cancelled");
   const overloadedVenues = liveVenues.filter(v => v.status === "overloaded" || v.status === "busy");
+  const portAgentPendingActions = liveRecommendations.filter(r => r.agentType === "port-disruption" && r.status !== "executed").length;
+  const onboardAgentPendingActions = liveRecommendations.filter(r => r.agentType === "onboard-ops" && r.status !== "executed").length;
+  const affectedExcursionGuests = disruptedExcursions.reduce((total, excursion) => total + excursion.booked, 0);
+  const excursionRevenueAtRisk = disruptedExcursions.reduce((total, excursion) => total + (excursion.booked * excursion.pricePerPerson), 0);
+  const impactedVenueGuests = overloadedVenues.reduce((total, venue) => total + venue.currentOccupancy, 0);
+  const avgAlertWaitTime = overloadedVenues.length > 0
+    ? Math.round(overloadedVenues.reduce((total, venue) => total + venue.waitTime, 0) / overloadedVenues.length)
+    : 0;
+  const staffingGap = overloadedVenues.reduce((total, venue) => total + Math.max(venue.optimalStaff - venue.staffCount, 0), 0);
 
   return (
     <div className="p-6 space-y-6 max-w-[1400px] mx-auto">
@@ -107,7 +114,7 @@ const Dashboard = () => {
         <AgentConfidenceChart />
       </div>
 
-      {/* Active Alerts & Pending Recommendations */}
+      {/* Active Alerts & Agent Stats */}
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Active Incidents */}
         <div>
@@ -131,13 +138,66 @@ const Dashboard = () => {
           </div>
         </div>
 
-        {/* Pending Recommendations */}
+        {/* Agent Stats */}
         <div>
-          <h2 className="text-sm font-semibold text-foreground mb-3">Pending Agent Recommendations ({pendingRecs.length})</h2>
+          <h2 className="text-sm font-semibold text-foreground mb-3">Agent Operations Snapshot</h2>
           <div className="space-y-3">
-            {pendingRecs.slice(0, 3).map((rec) => (
-              <RecommendationCard key={rec.id} recommendation={rec} />
-            ))}
+            <Link to="/port-disruption" className="block rounded-lg border border-warning/30 bg-card p-4 transition-colors hover:border-warning/50">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold text-foreground">Port & Excursions Agent</h3>
+                  <p className="mt-1 text-xs text-muted-foreground">Live disruption exposure based on current mock excursion records.</p>
+                </div>
+                <ArrowRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+              </div>
+              <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
+                <div className="rounded bg-muted p-3">
+                  <span className="text-muted-foreground">Disrupted Excursions</span>
+                  <p className="mt-1 text-lg font-semibold text-foreground">{disruptedExcursions.length}</p>
+                </div>
+                <div className="rounded bg-muted p-3">
+                  <span className="flex items-center gap-1 text-muted-foreground"><Users className="h-3 w-3" />Guests Impacted</span>
+                  <p className="mt-1 text-lg font-semibold text-foreground">{affectedExcursionGuests}</p>
+                </div>
+                <div className="rounded bg-muted p-3">
+                  <span className="flex items-center gap-1 text-muted-foreground"><DollarSign className="h-3 w-3" />Revenue At Risk</span>
+                  <p className="mt-1 text-lg font-semibold text-foreground">${excursionRevenueAtRisk.toLocaleString()}</p>
+                </div>
+                <div className="rounded bg-muted p-3">
+                  <span className="text-muted-foreground">Pending Actions</span>
+                  <p className="mt-1 text-lg font-semibold text-foreground">{portAgentPendingActions}</p>
+                </div>
+              </div>
+            </Link>
+
+            <Link to="/onboard-ops" className="block rounded-lg border border-info/30 bg-card p-4 transition-colors hover:border-info/50">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold text-foreground">Onboard Ops Agent</h3>
+                  <p className="mt-1 text-xs text-muted-foreground">Capacity and staffing pressure derived from the current venue mock data.</p>
+                </div>
+                <ArrowRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+              </div>
+              <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
+                <div className="rounded bg-muted p-3">
+                  <span className="text-muted-foreground">Venue Alerts</span>
+                  <p className="mt-1 text-lg font-semibold text-foreground">{overloadedVenues.length}</p>
+                </div>
+                <div className="rounded bg-muted p-3">
+                  <span className="flex items-center gap-1 text-muted-foreground"><Users className="h-3 w-3" />Guests In Alerted Venues</span>
+                  <p className="mt-1 text-lg font-semibold text-foreground">{impactedVenueGuests}</p>
+                </div>
+                <div className="rounded bg-muted p-3">
+                  <span className="flex items-center gap-1 text-muted-foreground"><Clock className="h-3 w-3" />Avg Wait Time</span>
+                  <p className="mt-1 text-lg font-semibold text-foreground">{avgAlertWaitTime} min</p>
+                </div>
+                <div className="rounded bg-muted p-3">
+                  <span className="flex items-center gap-1 text-muted-foreground"><TrendingUp className="h-3 w-3" />Staffing Gap</span>
+                  <p className="mt-1 text-lg font-semibold text-foreground">{staffingGap}</p>
+                </div>
+              </div>
+              <p className="mt-3 text-xs text-muted-foreground">{onboardAgentPendingActions} pending ops recommendations awaiting execution.</p>
+            </Link>
           </div>
         </div>
       </div>

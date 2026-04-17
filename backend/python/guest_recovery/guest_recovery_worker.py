@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import sys
 from dataclasses import dataclass
@@ -26,6 +27,18 @@ class AgentWorkerError(Exception):
         super().__init__(message)
         self.step = step
         self.message = message
+
+
+LOGGER = logging.getLogger(__name__)
+
+
+def _emit_worker_metric(metric_name: str, **fields: Any) -> None:
+    try:
+        payload = {"metric": metric_name, **fields}
+        LOGGER.warning("guest_recovery_metric %s", json.dumps(payload, sort_keys=True))
+    except Exception:
+        # Never allow observability failures to affect runtime behavior.
+        pass
 
 
 @dataclass(frozen=True)
@@ -303,6 +316,31 @@ def _fetch_actions_and_policies(cluster: Cluster, playbook_id: str, loyalty_tier
       AND a.active = true
     """
     policies_query = "SELECT META(p).id AS policyId, p.* FROM voyageops.agent.policy_rules p WHERE p.enabled = true"
+    playbook_incident_query = """
+    SELECT p.incidentType
+    FROM voyageops.agent.playbooks p
+    WHERE META(p).id = $playbookId
+    LIMIT 1
+    """
+    fallback_actions_by_incident_query = """
+    SELECT a.actionId,
+           a.label,
+           a.description,
+           a.estimatedValue,
+           a.incidentCategory,
+           a.incidentType,
+           a.loyaltyTier
+    FROM voyageops.agent.action_catalog a
+    WHERE a.active = true
+      AND LOWER(TRIM(a.incidentType)) = $incidentType
+      AND (
+            (IS_STRING(a.loyaltyTier) AND LOWER(TRIM(a.loyaltyTier)) IN ["any", $loyaltyTier])
+            OR (
+                IS_ARRAY(a.loyaltyTier)
+                AND ANY tier IN a.loyaltyTier SATISFIES LOWER(TRIM(tier)) IN ["any", $loyaltyTier] END
+            )
+          )
+    """
 
     try:
         action_rows = cluster.query(
@@ -316,7 +354,66 @@ def _fetch_actions_and_policies(cluster: Cluster, playbook_id: str, loyalty_tier
         raise AgentWorkerError("load_actions", f"Unable to load actions or policies: {error}") from error
 
     if not actions:
-        raise AgentWorkerError("load_actions", f"No eligible actions found for playbook {playbook_id}")
+        # Fallback path: when playbook actionIds are stale/missing, recover using incident-typed actions.
+        try:
+            playbook_rows = list(
+                cluster.query(
+                    playbook_incident_query,
+                    QueryOptions(named_parameters={"playbookId": playbook_id}),
+                ).rows()
+            )
+        except Exception as error:
+            raise AgentWorkerError(
+                "load_actions",
+                f"No eligible actions found for playbook {playbook_id}; also failed loading playbook metadata: {error}",
+            ) from error
+
+        if not playbook_rows:
+            raise AgentWorkerError("load_actions", f"No eligible actions found and playbook {playbook_id} could not be loaded")
+
+        incident_type = str(playbook_rows[0].get("incidentType") or "").strip().lower()
+        if not incident_type:
+            raise AgentWorkerError(
+                "load_actions",
+                f"No eligible actions found for playbook {playbook_id} and playbook incidentType is missing",
+            )
+
+        try:
+            fallback_rows = cluster.query(
+                fallback_actions_by_incident_query,
+                QueryOptions(
+                    named_parameters={
+                        "incidentType": incident_type,
+                        "loyaltyTier": str(loyalty_tier).strip().lower(),
+                    }
+                ),
+            )
+            actions = [dict(row) for row in fallback_rows.rows()]
+            if actions:
+                _emit_worker_metric(
+                    "actions_fallback_used",
+                    playbookId=playbook_id,
+                    incidentType=incident_type,
+                    loyaltyTier=str(loyalty_tier).strip().lower(),
+                    actionCount=len(actions),
+                )
+        except Exception as error:
+            raise AgentWorkerError(
+                "load_actions",
+                (
+                    f"No eligible actions found for playbook {playbook_id}; "
+                    f"fallback by incidentType '{incident_type}' failed: {error}"
+                ),
+            ) from error
+
+        if not actions:
+            raise AgentWorkerError(
+                "load_actions",
+                (
+                    f"No eligible actions found for playbook {playbook_id} and no fallback catalog "
+                    f"actions for incidentType '{incident_type}' and loyalty tier '{str(loyalty_tier).strip()}'"
+                ),
+            )
 
     def _is_any_tier_value(value: Any) -> bool:
         if isinstance(value, str):
@@ -357,6 +454,15 @@ def _fetch_actions_and_policies(cluster: Cluster, playbook_id: str, loyalty_tier
         filtered_by_tier_suffix.append(action)
 
     actions = filtered_by_tier_suffix
+
+    if not actions:
+        raise AgentWorkerError(
+            "load_actions",
+            (
+                f"No eligible actions remained after loyalty-tier suffix filtering "
+                f"for playbook {playbook_id} and loyalty tier '{str(loyalty_tier).strip()}'"
+            ),
+        )
 
     # For VIP tiers, optionally suppress generic "any" actions when tier-specific alternatives exist.
     if normalized_loyalty_tier in vip_tiers:
