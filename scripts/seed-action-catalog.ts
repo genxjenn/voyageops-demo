@@ -52,6 +52,29 @@ async function getEmbedding(text: string): Promise<number[]> {
   return embedding as number[];
 }
 
+async function getEmbeddingWithRetry(text: string, maxAttempts = 4): Promise<number[]> {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await getEmbedding(text);
+    } catch (error) {
+      lastError = error;
+      if (attempt === maxAttempts) {
+        break;
+      }
+
+      const backoffMs = 500 * 2 ** (attempt - 1);
+      console.warn(`Embedding attempt ${attempt}/${maxAttempts} failed. Retrying in ${backoffMs}ms...`);
+      await new Promise((resolve) => setTimeout(resolve, backoffMs));
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error('Embedding generation failed after retries');
+}
+
 function buildActionEmbeddingText(action: ActionCatalogEntry): string {
   const tiers = Array.isArray(action.loyaltyTier) 
     ? action.loyaltyTier.join(',') 
@@ -120,7 +143,7 @@ async function seedActionCatalogExtended(filePath: string) {
     try {
       // Generate embedding for the action
       const embeddingText = buildActionEmbeddingText(action);
-      const embedding = await getEmbedding(embeddingText);
+      const embedding = await getEmbeddingWithRetry(embeddingText);
 
       // Prepare document
       const key = `action_catalog::${action.actionId}`;

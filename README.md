@@ -71,6 +71,21 @@ python3 -m venv .venv
 
 Run these **once** after provisioning your Couchbase cluster (or any time you want to reset catalog/playbook data):
 
+First, create scopes/collections/indexes in Query Workbench:
+
+```sql
+-- Core app scopes + collections + primary indexes
+-- Run from database/core.scope.sql
+
+-- Agent scope + collections + primary indexes + vector indexes
+-- Run from database/agent.scope.sql
+
+-- Eventing metadata scope + collection
+-- Run from database/prepForEventing.sql
+```
+
+Then run the seed scripts:
+
 ```sh
 # Seed action catalog (generates OpenAI embeddings — takes ~2 min)
 npx tsx scripts/seed-action-catalog.ts

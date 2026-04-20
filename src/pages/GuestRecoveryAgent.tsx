@@ -285,9 +285,14 @@ const GuestRecoveryAgent = () => {
         .filter((guestId): guestId is string => Boolean(guestId)),
     ),
   );
+  const rankedGuestById = new Map(
+    topRankedIncidents
+      .map(({ incident: rankedIncident, guest: rankedGuest }) => [rankedIncident.guestId, rankedGuest] as const)
+      .filter(([guestId]) => Boolean(guestId)),
+  );
   const topGuestOptions = topGuestIds.map(guestId => ({
     guestId,
-    guest: findGuestById(guests, guestId),
+    guest: rankedGuestById.get(guestId) ?? findGuestById(guests, guestId),
   }));
 
   useEffect(() => {
@@ -296,7 +301,12 @@ const GuestRecoveryAgent = () => {
     }
   }, [selectedGuestId, topGuestIds]);
 
-  const guest = findGuestById(guests, selectedGuestId) ?? topGuestOptions[0]?.guest ?? guests[0] ?? EMPTY_GUEST;
+  const selectedTopGuestOption = topGuestOptions.find((option) => option.guestId === selectedGuestId);
+  const guest = findGuestById(guests, selectedGuestId)
+    ?? selectedTopGuestOption?.guest
+    ?? topGuestOptions[0]?.guest
+    ?? guests[0]
+    ?? EMPTY_GUEST;
   const openIncidentIds = new Set(nonClosedIncidents.map((inc) => getIncidentIdentifier(inc)));
   const openIncidentProposals = (proposalsQuery.data ?? []).filter((proposal) => openIncidentIds.has(proposal.incidentId));
   const selectedProposal = incidentIdForProposal

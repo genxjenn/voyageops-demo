@@ -29,5 +29,6 @@ __pycache__/
 .worker.pid
 *.py[cod]
 backend/python/guest_recovery/__pycache__/*
+backend/python/guest_recovery/__pyc*
 
 data/*2

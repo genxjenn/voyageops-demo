@@ -61,7 +61,7 @@ const playbookSeeds: PlaybookSeed[] = [
     incidentType: 'lost-item',
     severity: 'high',
     loyaltyTier: 'any',
-    actionIds: ['gr_luggage_priority_search', 'gr_bridge_followup_call'],
+    actionIds: ['gr_lost-item_priority_search_vip', 'gr_bridge_followup_call'],
     active: true,
   },
   {
@@ -105,7 +105,7 @@ const playbookSeeds: PlaybookSeed[] = [
     incidentType: 'service-escalation',
     severity: 'critical',
     loyaltyTier: 'platinum',
-    actionIds: ['gr_bridge_followup_call', 'gr_executive_lounge_access', 'gr_complimentary_specialty_dining'],
+    actionIds: ['gr_bridge_followup_call', 'gr_executive_lounge_access_std', 'gr_complimentary_specialty_dining'],
     active: true,
   },
   // ── Top-5 incident coverage: dining complaint ─────────────────────────────
@@ -204,11 +204,10 @@ const playbookSeeds: PlaybookSeed[] = [
     severity: 'high',
     loyaltyTier: ['diamond', 'elite platinum', 'emerald'],
     actionIds: [
-      'gr_luggage_priority_search',
+      'gr_lost-item_priority_search_std',
       'gr_bridge_followup_call',
       'gr_concierge_priority_vip',
       'gr_onboard_credit_premium_vip',
-      'gr_future_cruise_credit_vip',
       'gr_specialty_service_credit_vip',
     ],
     active: true,
@@ -262,7 +261,7 @@ const policyRuleSeeds: PolicyRuleSeed[] = [
     directives: {
       disallowActionIds: ['gr_room_suite_upgrade_comp', 'gr_suite_upgrade_ultra_vip', 'gr_cabin_upgrade_coupon_vip'],
       disallowActionFamilies: ['room-upgrade', 'suite-upgrade'],
-      preferActionIds: ['gr_luggage_priority_search', 'gr_bridge_followup_call', 'gr_specialty_service_credit_vip'],
+      preferActionIds: ['gr_lost-item_priority_search_std', 'gr_bridge_followup_call', 'gr_specialty_service_credit_vip'],
       requireIncidentTypeCategoryFit: true,
     },
   },
@@ -278,7 +277,7 @@ const policyRuleSeeds: PolicyRuleSeed[] = [
     directives: {
       disallowActionIds: ['gr_room_suite_upgrade_comp', 'gr_suite_upgrade_ultra_vip', 'gr_cabin_upgrade_coupon_vip'],
       disallowActionFamilies: ['room-upgrade', 'suite-upgrade'],
-      preferActionIds: ['gr_luggage_priority_search', 'gr_bridge_followup_call', 'gr_specialty_service_credit_vip'],
+      preferActionIds: ['gr_lost-item_priority_search_std', 'gr_bridge_followup_call', 'gr_specialty_service_credit_vip'],
       requireIncidentTypeCategoryFit: true,
     },
   },
