@@ -31,6 +31,11 @@ class AgentWorkerError(Exception):
 
 LOGGER = logging.getLogger(__name__)
 
+# Module-level caches: populated on first use and reused across all runs in the
+# same worker process, avoiding repeated round-trips for data that doesn't change.
+_verified_search_indexes: set[str] = set()
+_policy_rules_cache: list[dict[str, Any]] | None = None
+
 
 def _emit_worker_metric(metric_name: str, **fields: Any) -> None:
     try:
@@ -72,6 +77,7 @@ def create_cluster(settings: Settings) -> Cluster:
     return Cluster(settings.couchbase_endpoint, ClusterOptions(auth))
 
 
+@lru_cache(maxsize=1)
 def create_openai_client(settings: Settings) -> OpenAI:
     return OpenAI(api_key=settings.openai_api_key)
 
@@ -282,6 +288,10 @@ def _find_playbook_id_from_context(cluster: Cluster, context: Mapping[str, Any])
 
 
 def _ensure_search_index_exists(cluster: Cluster, index_name: str) -> None:
+    # Skip the full metadata scan if we've already confirmed this index exists.
+    if index_name in _verified_search_indexes:
+        return
+
     try:
         indexes = cluster.search_indexes().get_all_indexes()
     except Exception as error:
@@ -298,6 +308,7 @@ def _ensure_search_index_exists(cluster: Cluster, index_name: str) -> None:
                 "Set CB_PLAYBOOK_VECTOR_INDEX to the correct index name or create the expected playbook vector index."
             ),
         )
+    _verified_search_indexes.add(index_name)
 
 
 def _ensure_playbook_embedding_is_valid(cluster: Cluster, playbook_id: str) -> None:
@@ -412,11 +423,18 @@ def _fetch_actions_and_policies(cluster: Cluster, playbook_id: str, loyalty_tier
             eligible_actions_query,
             QueryOptions(named_parameters={"playbookId": playbook_id, "loyaltyTier": str(loyalty_tier).strip().lower()}),
         )
-        policy_rows = cluster.query(policies_query)
         actions = [dict(row) for row in action_rows.rows()]
-        policies = [dict(row) for row in policy_rows.rows()]
     except Exception as error:
         raise AgentWorkerError("load_actions", f"Unable to load actions or policies: {error}") from error
+
+    global _policy_rules_cache
+    if _policy_rules_cache is None:
+        try:
+            policy_rows = cluster.query(policies_query)
+            _policy_rules_cache = [dict(row) for row in policy_rows.rows()]
+        except Exception as error:
+            raise AgentWorkerError("load_actions", f"Unable to load policy rules: {error}") from error
+    policies = _policy_rules_cache
 
     # Always augment playbook actions with incident-typed catalog actions to guard
     # against stale/missing playbook actionIds while keeping data-driven behavior.

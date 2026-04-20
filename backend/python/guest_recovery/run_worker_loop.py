@@ -6,6 +6,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from couchbase.options import QueryOptions
@@ -104,6 +105,7 @@ def main() -> None:
 
     poll_seconds = float(os.getenv("GUEST_RECOVERY_POLL_SECONDS", "3"))
     batch_size = int(os.getenv("GUEST_RECOVERY_POLL_BATCH_SIZE", "10"))
+    max_workers = int(os.getenv("GUEST_RECOVERY_WORKER_THREADS", "3"))
 
     settings = get_settings()
     cluster = create_cluster(settings)
@@ -111,7 +113,7 @@ def main() -> None:
     log(
         "info",
         f"Guest Recovery worker loop started (PID {os.getpid()}, poll={poll_seconds}s, "
-        f"batch={batch_size}, bucket={settings.couchbase_bucket})",
+        f"batch={batch_size}, threads={max_workers}, bucket={settings.couchbase_bucket})",
     )
 
     try:
@@ -129,26 +131,31 @@ def main() -> None:
 
             log("info", f"Found {len(run_ids)} pending run(s)")
 
-            for run_id in run_ids:
-                try:
-                    log("info", f"Processing run {run_id}…", runId=run_id, step="started")
-                    result = run_guest_recovery_agent(run_id, cluster=cluster)
-                    log(
-                        "success",
-                        f"Completed run {run_id} → proposal {result.get('proposalId')}",
-                        runId=run_id,
-                        proposalId=result.get("proposalId", ""),
-                        step="write_proposal",
-                    )
-                except AgentWorkerError as error:
-                    log(
-                        "error",
-                        f"Run {run_id} failed at step '{error.step}': {error.message}",
-                        runId=run_id,
-                        step=error.step,
-                    )
-                except Exception as error:
-                    log("error", f"Run {run_id} failed with unexpected error: {error}", runId=run_id)
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {
+                    executor.submit(run_guest_recovery_agent, run_id, cluster=cluster): run_id
+                    for run_id in run_ids
+                }
+                for future in as_completed(futures):
+                    run_id = futures[future]
+                    try:
+                        result = future.result()
+                        log(
+                            "success",
+                            f"Completed run {run_id} → proposal {result.get('proposalId')}",
+                            runId=run_id,
+                            proposalId=result.get("proposalId", ""),
+                            step="write_proposal",
+                        )
+                    except AgentWorkerError as error:
+                        log(
+                            "error",
+                            f"Run {run_id} failed at step '{error.step}': {error.message}",
+                            runId=run_id,
+                            step=error.step,
+                        )
+                    except Exception as error:
+                        log("error", f"Run {run_id} failed with unexpected error: {error}", runId=run_id)
 
             time.sleep(poll_seconds)
     except KeyboardInterrupt:
