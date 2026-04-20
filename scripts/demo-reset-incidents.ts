@@ -4,6 +4,122 @@ import path from 'node:path';
 import { initCouchbase, db } from '../src/lib/couchbase.ts';
 
 const BUCKET = process.env.COUCHBASE_BUCKET || 'voyageops';
+const OPENAI_EMBEDDING_MODEL = process.env.OPENAI_EMBEDDING_MODEL || 'text-embedding-3-small';
+
+async function getEmbedding(text: string): Promise<number[]> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error('OPENAI_API_KEY is missing');
+  }
+
+  const response = await fetch('https://api.openai.com/v1/embeddings', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      input: text,
+      model: OPENAI_EMBEDDING_MODEL,
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Embedding API failed: ${response.status} ${body}`);
+  }
+
+  const payload = await response.json();
+  const embedding = payload?.data?.[0]?.embedding;
+  if (!Array.isArray(embedding)) {
+    throw new Error('Embedding API returned an invalid vector');
+  }
+
+  return embedding as number[];
+}
+
+async function getEmbeddingWithRetry(text: string, maxAttempts = 4): Promise<number[]> {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await getEmbedding(text);
+    } catch (error) {
+      lastError = error;
+      if (attempt === maxAttempts) {
+        break;
+      }
+      const backoffMs = 500 * 2 ** (attempt - 1);
+      console.warn(`Embedding attempt ${attempt}/${maxAttempts} failed. Retrying in ${backoffMs}ms...`);
+      await new Promise((resolve) => setTimeout(resolve, backoffMs));
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error('Embedding generation failed after retries');
+}
+
+async function backfillIncidentEmbeddings(): Promise<number> {
+  if (!process.env.OPENAI_API_KEY) {
+    console.log('Skipping embedding backfill: OPENAI_API_KEY not set.');
+    return 0;
+  }
+
+  const query = `
+    SELECT META(i).id AS incidentId,
+           i.category,
+           i.type,
+           i.description,
+           i.vector_category_incidents IS MISSING AS needsCategory,
+           i.vector_type_incidents IS MISSING AS needsType,
+           i.vector_desc_incidents IS MISSING AS needsDesc
+    FROM \`${BUCKET}\`.guests.incidents AS i
+    WHERE i.vector_category_incidents IS MISSING
+       OR i.vector_type_incidents IS MISSING
+       OR i.vector_desc_incidents IS MISSING
+  `;
+
+  const result = await db.cluster.query(query, { timeout: 30000 });
+  const rows = result.rows as Array<{
+    incidentId: string;
+    category: string;
+    type: string;
+    description: string;
+    needsCategory: boolean;
+    needsType: boolean;
+    needsDesc: boolean;
+  }>;
+
+  if (rows.length === 0) {
+    return 0;
+  }
+
+  console.log(`Backfilling embeddings for ${rows.length} incident(s)...`);
+  let updated = 0;
+
+  for (const row of rows) {
+    const patch: Record<string, number[]> = {};
+
+    if (row.needsCategory && row.category) {
+      patch.vector_category_incidents = await getEmbeddingWithRetry(row.category);
+    }
+    if (row.needsType && row.type) {
+      patch.vector_type_incidents = await getEmbeddingWithRetry(row.type);
+    }
+    if (row.needsDesc && row.description) {
+      patch.vector_desc_incidents = await getEmbeddingWithRetry(row.description);
+    }
+
+    if (Object.keys(patch).length > 0) {
+      const existing = await db.incidents.get(row.incidentId);
+      await db.incidents.upsert(row.incidentId, { ...existing.content, ...patch });
+      updated += 1;
+    }
+  }
+
+  return updated;
+}
 
 function isMissingKeyspaceError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
@@ -151,6 +267,11 @@ async function main() {
     const seeded = await seedIncidentsFromDataFileIfEmpty();
     if (seeded > 0) {
       console.log(`Seeded incidents from data/voyageops.guests.incidents: ${seeded}`);
+    }
+
+    const backfilled = await backfillIncidentEmbeddings();
+    if (backfilled > 0) {
+      console.log(`Backfilled embeddings for ${backfilled} incident(s).`);
     }
 
     const reopenedCount = await resetAllIncidentsToOpen();
