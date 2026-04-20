@@ -410,6 +410,13 @@ export function AgentChat({ agentType = "general", className, onCommand }: Agent
     const messageText = text || input.trim();
     if (!messageText || isStreaming) return;
 
+    // Quick command: clear chat history without sending a query.
+    if (messageText.trim().toLowerCase() === "clear") {
+      setMessages([]);
+      setInput("");
+      return;
+    }
+
     const userMsg: ChatMessage = {
       id: `user-${Date.now()}`,
       role: "user",

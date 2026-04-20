@@ -28,4 +28,6 @@ dist-ssr
 __pycache__/
 .worker.pid
 *.py[cod]
-backend/python/guest_recovery/__pycache__/
+backend/python/guest_recovery/__pycache__/*
+
+data/*2

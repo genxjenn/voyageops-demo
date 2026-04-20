@@ -132,7 +132,7 @@ def main() -> None:
             for run_id in run_ids:
                 try:
                     log("info", f"Processing run {run_id}…", runId=run_id, step="started")
-                    result = run_guest_recovery_agent(run_id)
+                    result = run_guest_recovery_agent(run_id, cluster=cluster)
                     log(
                         "success",
                         f"Completed run {run_id} → proposal {result.get('proposalId')}",

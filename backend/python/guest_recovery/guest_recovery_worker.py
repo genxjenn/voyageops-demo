@@ -101,10 +101,20 @@ def _get_document(collection: Any, document_id: str) -> dict[str, Any]:
         raise AgentWorkerError("load_run", f"Document {document_id} did not contain a JSON object") from error
 
 
-def _merge_and_upsert(collection: Any, document_id: str, current: Mapping[str, Any], updates: Mapping[str, Any]) -> None:
+def _merge_and_upsert(
+    collection: Any,
+    document_id: str,
+    current: Mapping[str, Any],
+    updates: Mapping[str, Any],
+    *,
+    step: str,
+) -> None:
     merged = dict(current)
     merged.update(updates)
-    collection.upsert(document_id, merged)
+    try:
+        collection.upsert(document_id, merged)
+    except Exception as error:
+        raise AgentWorkerError(step, f"Unable to update run document {document_id}: {error}") from error
 
 
 def _normalize_run_document(agent_run_or_id: str | Mapping[str, Any], agent_runs_collection: Any) -> tuple[str, dict[str, Any]]:
@@ -156,7 +166,7 @@ def _update_run_status(
     if proposal_id:
         updates["proposalId"] = proposal_id
 
-    _merge_and_upsert(agent_runs_collection, run_id, current_run, updates)
+    _merge_and_upsert(agent_runs_collection, run_id, current_run, updates, step=step)
     merged = dict(current_run)
     merged.update(updates)
     return merged
@@ -214,6 +224,61 @@ def _create_incident_embedding(client: OpenAI, settings: Settings, description: 
         return list(embedding_response.data[0].embedding)
     except Exception as error:
         raise AgentWorkerError("embedding", "Embedding response did not include a usable vector") from error
+
+
+def _normalize_incident_type_key(value: Any) -> str:
+    return str(value or "").strip().lower().replace("_", "-").replace(" ", "-")
+
+
+def _find_playbook_id_from_context(cluster: Cluster, context: Mapping[str, Any]) -> str | None:
+    incident_type = _normalize_incident_type_key(context.get("type"))
+    severity = str(context.get("severity") or "").strip().lower()
+    loyalty_tier = str(context.get("loyaltyTier") or "").strip().lower()
+
+    if not incident_type or not severity:
+        return None
+
+    query = """
+    SELECT META(p).id AS playbookId
+    FROM voyageops.agent.playbooks p
+    WHERE p.active = true
+      AND LOWER(REPLACE(REPLACE(TRIM(p.incidentType), " ", "-"), "_", "-")) = $incidentType
+      AND LOWER(TRIM(p.severity)) = $severity
+      AND (
+            (IS_STRING(p.loyaltyTier) AND LOWER(TRIM(p.loyaltyTier)) IN ["any", $loyaltyTier])
+            OR (
+                IS_ARRAY(p.loyaltyTier)
+                AND ANY tier IN p.loyaltyTier SATISFIES LOWER(TRIM(tier)) IN ["any", $loyaltyTier] END
+            )
+          )
+    ORDER BY CASE
+      WHEN IS_STRING(p.loyaltyTier) AND LOWER(TRIM(p.loyaltyTier)) = $loyaltyTier THEN 0
+      WHEN IS_ARRAY(p.loyaltyTier) AND ANY tier IN p.loyaltyTier SATISFIES LOWER(TRIM(tier)) = $loyaltyTier END THEN 0
+      ELSE 1
+    END
+    LIMIT 1
+    """
+
+    try:
+        result = cluster.query(
+            query,
+            QueryOptions(
+                named_parameters={
+                    "incidentType": incident_type,
+                    "severity": severity,
+                    "loyaltyTier": loyalty_tier,
+                }
+            ),
+        )
+        rows = list(result.rows())
+    except Exception as error:
+        raise AgentWorkerError("playbook_lookup", f"Unable to resolve playbook by incident context: {error}") from error
+
+    if not rows:
+        return None
+
+    playbook_id = str(rows[0].get("playbookId") or "").strip()
+    return playbook_id or None
 
 
 def _ensure_search_index_exists(cluster: Cluster, index_name: str) -> None:
@@ -353,31 +418,26 @@ def _fetch_actions_and_policies(cluster: Cluster, playbook_id: str, loyalty_tier
     except Exception as error:
         raise AgentWorkerError("load_actions", f"Unable to load actions or policies: {error}") from error
 
-    if not actions:
-        # Fallback path: when playbook actionIds are stale/missing, recover using incident-typed actions.
-        try:
-            playbook_rows = list(
-                cluster.query(
-                    playbook_incident_query,
-                    QueryOptions(named_parameters={"playbookId": playbook_id}),
-                ).rows()
-            )
-        except Exception as error:
+    # Always augment playbook actions with incident-typed catalog actions to guard
+    # against stale/missing playbook actionIds while keeping data-driven behavior.
+    try:
+        playbook_rows = list(
+            cluster.query(
+                playbook_incident_query,
+                QueryOptions(named_parameters={"playbookId": playbook_id}),
+            ).rows()
+        )
+    except Exception as error:
+        if not actions:
             raise AgentWorkerError(
                 "load_actions",
                 f"No eligible actions found for playbook {playbook_id}; also failed loading playbook metadata: {error}",
             ) from error
+        playbook_rows = []
 
-        if not playbook_rows:
-            raise AgentWorkerError("load_actions", f"No eligible actions found and playbook {playbook_id} could not be loaded")
+    incident_type = str(playbook_rows[0].get("incidentType") or "").strip().lower() if playbook_rows else ""
 
-        incident_type = str(playbook_rows[0].get("incidentType") or "").strip().lower()
-        if not incident_type:
-            raise AgentWorkerError(
-                "load_actions",
-                f"No eligible actions found for playbook {playbook_id} and playbook incidentType is missing",
-            )
-
+    if incident_type and not actions:
         try:
             fallback_rows = cluster.query(
                 fallback_actions_by_incident_query,
@@ -388,8 +448,10 @@ def _fetch_actions_and_policies(cluster: Cluster, playbook_id: str, loyalty_tier
                     }
                 ),
             )
-            actions = [dict(row) for row in fallback_rows.rows()]
-            if actions:
+            fallback_actions = [dict(row) for row in fallback_rows.rows()]
+
+            if fallback_actions:
+                actions = fallback_actions
                 _emit_worker_metric(
                     "actions_fallback_used",
                     playbookId=playbook_id,
@@ -398,22 +460,28 @@ def _fetch_actions_and_policies(cluster: Cluster, playbook_id: str, loyalty_tier
                     actionCount=len(actions),
                 )
         except Exception as error:
-            raise AgentWorkerError(
-                "load_actions",
-                (
-                    f"No eligible actions found for playbook {playbook_id}; "
-                    f"fallback by incidentType '{incident_type}' failed: {error}"
-                ),
-            ) from error
+            if not actions:
+                raise AgentWorkerError(
+                    "load_actions",
+                    (
+                        f"No eligible actions found for playbook {playbook_id}; "
+                        f"fallback by incidentType '{incident_type}' failed: {error}"
+                    ),
+                ) from error
 
-        if not actions:
+    if not actions:
+        if not incident_type:
             raise AgentWorkerError(
                 "load_actions",
-                (
-                    f"No eligible actions found for playbook {playbook_id} and no fallback catalog "
-                    f"actions for incidentType '{incident_type}' and loyalty tier '{str(loyalty_tier).strip()}'"
-                ),
+                f"No eligible actions found for playbook {playbook_id} and playbook incidentType is missing",
             )
+        raise AgentWorkerError(
+            "load_actions",
+            (
+                f"No eligible actions found for playbook {playbook_id} and no fallback catalog "
+                f"actions for incidentType '{incident_type}' and loyalty tier '{str(loyalty_tier).strip()}'"
+            ),
+        )
 
     def _is_any_tier_value(value: Any) -> bool:
         if isinstance(value, str):
@@ -553,12 +621,14 @@ def _build_prompt(context: Mapping[str, Any], actions: list[dict[str, Any]], pol
             # Constrain model selection to relevance-ranked candidates.
             "eligibleActions": shortlist,
             "actionShortlist": shortlist,
+            "allowedActionIds": [str(action.get("actionId") or "") for action in shortlist],
             "policyRules": policies,
             "task": {
                 "selectExactlyOneAction": True,
                 "requireIncidentTypeCategoryFit": True,
                 "escalateIfRecentIncidentsGte": 2,
                 "targetMaxRecoveryBudget": max_recovery_budget,
+                "actionIdMustBeFromAllowedActionIds": True,
                 "responseSchema": {
                     "actionId": "string",
                     "summary": "string",
@@ -585,9 +655,50 @@ def _parse_recommendation(response_content: str, actions: list[dict[str, Any]]) 
     if missing_keys:
         raise AgentWorkerError("llm_response", f"LLM response missing required fields: {', '.join(missing_keys)}")
 
-    selected_action = next((action for action in actions if action.get("actionId") == payload["actionId"]), None)
+    def _normalize_action_id(value: Any) -> str:
+        return str(value or "").strip().lower()
+
+    def _resolve_action(action_id: Any) -> dict[str, Any] | None:
+        requested = _normalize_action_id(action_id)
+        if not requested:
+            return None
+
+        # 1) Exact match (case-insensitive)
+        for action in actions:
+            if _normalize_action_id(action.get("actionId")) == requested:
+                return action
+
+        # 2) Suffix-aware fallback: model may omit _vip/_std even though eligible actions include one.
+        has_tier_suffix = requested.endswith("_vip") or requested.endswith("_std")
+        if not has_tier_suffix:
+            suffix_candidates = [
+                action
+                for action in actions
+                if _normalize_action_id(action.get("actionId")).startswith(f"{requested}_")
+                and (
+                    _normalize_action_id(action.get("actionId")).endswith("_vip")
+                    or _normalize_action_id(action.get("actionId")).endswith("_std")
+                )
+            ]
+            if len(suffix_candidates) == 1:
+                return suffix_candidates[0]
+
+        return None
+
+    selected_action = _resolve_action(payload["actionId"])
     if not selected_action:
-        raise AgentWorkerError("llm_response", f"LLM selected unknown actionId: {payload['actionId']}")
+        # Guardrail: prevent full run failure if the model hallucinates an action ID.
+        # `actions` is relevance-ranked before prompting, so index 0 is the safest fallback.
+        if not actions:
+            raise AgentWorkerError("llm_response", f"LLM selected unknown actionId: {payload['actionId']}")
+
+        selected_action = actions[0]
+        _emit_worker_metric(
+            "llm_unknown_action_fallback",
+            selectedActionId=str(payload.get("actionId") or ""),
+            fallbackActionId=str(selected_action.get("actionId") or ""),
+            eligibleActionCount=len(actions),
+        )
 
     priority = str(payload["priority"]).lower()
     if priority not in {"low", "medium", "high"}:
@@ -639,16 +750,18 @@ def _parse_recommendation(response_content: str, actions: list[dict[str, Any]]) 
         return False
 
     for action_id in alternative_action_ids:
-        if action_id == selected_action["actionId"]:
+        resolved_alt = _resolve_action(action_id)
+        if not resolved_alt:
             continue
-        alt = next((action for action in actions if action.get("actionId") == action_id), None)
-        if alt and not _already_has_semantic_duplicate(alt, alternatives):
+        if str(resolved_alt.get("actionId")) == str(selected_action["actionId"]):
+            continue
+        if not _already_has_semantic_duplicate(resolved_alt, alternatives):
             alternatives.append(
                 {
-                    "actionId": str(alt["actionId"]),
-                    "label": str(alt["label"]),
-                    "description": str(alt.get("description") or ""),
-                    "estimatedValue": float(alt.get("estimatedValue") or 0),
+                    "actionId": str(resolved_alt["actionId"]),
+                    "label": str(resolved_alt["label"]),
+                    "description": str(resolved_alt.get("description") or ""),
+                    "estimatedValue": float(resolved_alt.get("estimatedValue") or 0),
                 }
             )
 
@@ -757,11 +870,14 @@ def _write_proposal(
     return proposal_id
 
 
-def run_guest_recovery_agent(agent_run_or_id: str | Mapping[str, Any]) -> dict[str, Any]:
+def run_guest_recovery_agent(
+    agent_run_or_id: str | Mapping[str, Any],
+    cluster: Cluster | None = None,
+) -> dict[str, Any]:
     settings = get_settings()
-    cluster = create_cluster(settings)
+    resolved_cluster = cluster or create_cluster(settings)
     openai_client = create_openai_client(settings)
-    collections = _agent_collections(cluster, settings.couchbase_bucket)
+    collections = _agent_collections(resolved_cluster, settings.couchbase_bucket)
 
     run_id: str | None = None
     run_document: dict[str, Any] | None = None
@@ -776,10 +892,20 @@ def run_guest_recovery_agent(agent_run_or_id: str | Mapping[str, Any]) -> dict[s
             step="load_run",
         )
 
-        context = _fetch_incident_context(cluster, str(run_document["incidentId"]))
+        context = _fetch_incident_context(resolved_cluster, str(run_document["incidentId"]))
         incident_vector = _create_incident_embedding(openai_client, settings, str(context["description"]))
-        playbook_id = _find_playbook_id(cluster, settings.playbook_index_name, incident_vector)
-        actions, policies = _fetch_actions_and_policies(cluster, playbook_id, str(context["loyaltyTier"]))
+        playbook_id = _find_playbook_id_from_context(resolved_cluster, context)
+        if playbook_id:
+            _emit_worker_metric(
+                "playbook_context_match_used",
+                playbookId=playbook_id,
+                incidentType=str(context.get("type") or ""),
+                severity=str(context.get("severity") or ""),
+                loyaltyTier=str(context.get("loyaltyTier") or ""),
+            )
+        else:
+            playbook_id = _find_playbook_id(resolved_cluster, settings.playbook_index_name, incident_vector)
+        actions, policies = _fetch_actions_and_policies(resolved_cluster, playbook_id, str(context["loyaltyTier"]))
         recommendation = _generate_recommendation(openai_client, settings, context, actions, policies)
         proposal_id = _write_proposal(collections["action_proposals"], run_document, recommendation)
 
@@ -800,23 +926,29 @@ def run_guest_recovery_agent(agent_run_or_id: str | Mapping[str, Any]) -> dict[s
         }
     except AgentWorkerError as error:
         if run_id and run_document is not None:
-            _update_run_status(
-                collections["agent_runs"],
-                run_id,
-                run_document,
-                status="failed",
-                step=error.step,
-                error_message=error.message,
-            )
+            try:
+                _update_run_status(
+                    collections["agent_runs"],
+                    run_id,
+                    run_document,
+                    status="failed",
+                    step=error.step,
+                    error_message=error.message,
+                )
+            except AgentWorkerError as status_error:
+                LOGGER.warning("Failed to persist agent run failure status: %s", status_error.message)
         raise
     except Exception as error:
         if run_id and run_document is not None:
-            _update_run_status(
-                collections["agent_runs"],
-                run_id,
-                run_document,
-                status="failed",
-                step="unexpected_error",
-                error_message=str(error),
-            )
+            try:
+                _update_run_status(
+                    collections["agent_runs"],
+                    run_id,
+                    run_document,
+                    status="failed",
+                    step="unexpected_error",
+                    error_message=str(error),
+                )
+            except AgentWorkerError as status_error:
+                LOGGER.warning("Failed to persist unexpected-error status: %s", status_error.message)
         raise AgentWorkerError("unexpected_error", str(error)) from error

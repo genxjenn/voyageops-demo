@@ -15,7 +15,8 @@
     "demo:load-bookings": "npx tsx scripts/load-bookings-backup.ts",
     "demo:reset-incidents": "npx tsx scripts/demo-reset-incidents.ts",
     "demo:worker": ".venv/bin/python backend/python/guest_recovery/run_worker_loop.py",
-    "demo:day": "npm run demo:reset-incidents && npm run demo:worker"
+    "demo:day": "npm run demo:reset-incidents && npm run demo:worker",
+    "demo:rerun": "./.venv/bin/python -c \"from backend.python.guest_recovery.guest_recovery_worker import run_guest_recovery_agent; import sys; print(run_guest_recovery_agent(sys.argv[1]))\""
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

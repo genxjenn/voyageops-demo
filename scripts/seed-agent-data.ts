@@ -65,6 +65,17 @@ const playbookSeeds: PlaybookSeed[] = [
     active: true,
   },
   {
+    playbookId: 'pb_gr_lost_item_low',
+    title: 'Lost item low-priority goodwill',
+    description: 'Low-severity lost-item recovery with small, low-friction guest goodwill actions.',
+    agentType: 'guest-recovery',
+    incidentType: 'lost-item',
+    severity: 'low',
+    loyaltyTier: 'any',
+    actionIds: ['gr_internet_day_pass', 'gr_spa_credit_50'],
+    active: true,
+  },
+  {
     playbookId: 'pb_gr_family_disruption',
     title: 'Family disruption goodwill',
     description: 'Family-first service recovery plan balancing schedule and value protection.',

@@ -112,6 +112,18 @@ function tokenizeText(input: string) {
   );
 }
 
+function extractIncidentIdFromQuery(query: string) {
+  // Supports IDs like IN_IOS-114_237 and IN_IOS-114_237::guest-recovery
+  const match = query.match(/\bIN_[A-Z0-9-]+_[A-Z0-9-]+(?:::[A-Za-z0-9_-]+)?\b/i);
+  return match ? match[0] : undefined;
+}
+
+function extractGuestIdFromQuery(query: string) {
+  // Supports IDs like guest222
+  const match = query.match(/\bguest\d+\b/i);
+  return match ? match[0].toLowerCase() : undefined;
+}
+
 async function getQueryEmbeddingFromIncidentCorpus(query: string) {
   const tokens = tokenizeText(query);
   const corpusQuery = `
@@ -190,9 +202,46 @@ function buildGuestRecoveryChatResponse(params: {
   guestsById: Map<string, any>;
   retrievalMode: 'vector-index' | 'vector-fallback';
   proposal?: any;
+  requestedIncidentId?: string;
+  incidentLookupStatus?: 'found' | 'not-found';
+  requestedGuestId?: string;
+  guestLookupStatus?: 'found' | 'not-found';
 }) {
-  const { query, incidents, guestsById, proposal } = params;
+  const {
+    query,
+    incidents,
+    guestsById,
+    proposal,
+    requestedIncidentId,
+    incidentLookupStatus,
+    requestedGuestId,
+    guestLookupStatus,
+  } = params;
   const primaryIncident = incidents[0];
+
+  if (requestedGuestId && guestLookupStatus === 'not-found') {
+    return [
+      '### Guest Recovery Assessment',
+      '',
+      `I could not find guest **${requestedGuestId}** in the current guest dataset.`,
+      '',
+      'I do not want to redirect you to an unrelated recovery case.',
+      '',
+      'If you share the correct guest ID, I can retrieve that guest\'s latest incident and response plan.',
+    ].join('\n');
+  }
+
+  if (requestedGuestId && guestLookupStatus === 'found' && !primaryIncident) {
+    const requestedGuest = guestsById.get(requestedGuestId);
+    const requestedGuestName = requestedGuest?.fullName || requestedGuest?.name || requestedGuestId;
+    return [
+      '### Guest Recovery Assessment',
+      '',
+      `I found **${requestedGuestName}** (${requestedGuestId}), but there are no incidents for this guest right now.`,
+      '',
+      'No response plan exists yet because there is no active incident tied to this guest.',
+    ].join('\n');
+  }
 
   if (!primaryIncident) {
     return [
@@ -201,6 +250,18 @@ function buildGuestRecoveryChatResponse(params: {
       `I did not find a strong guest-recovery match for _${query}_.`,
       '',
       'Try asking about a guest name, a recovery preference, or an incident type so I can ground the recommendation in a live case.',
+    ].join('\n');
+  }
+
+  if (requestedIncidentId && incidentLookupStatus === 'not-found') {
+    return [
+      '### Guest Recovery Assessment',
+      '',
+      `I could not find incident **${requestedIncidentId}** in the current incident dataset.`,
+      '',
+      'I do not want to guess or redirect you to an unrelated case.',
+      '',
+      'If you share the correct incident ID, guest name, or incident type/category, I can provide an exact recovery recommendation for that request.',
     ].join('\n');
   }
 
@@ -224,6 +285,42 @@ function buildGuestRecoveryChatResponse(params: {
   }
   if (/(call|follow up|follow-up|apology|contact)/.test(normalizedQuery)) {
     operatorIntent.push('add a direct human follow-up step');
+  }
+
+  const searchablePrimary = `${primaryIncident.incidentId || ''} ${primaryIncident.type || ''} ${primaryIncident.category || ''} ${primaryIncident.description || ''} ${guestName}`;
+  const primaryTokens = tokenizeText(searchablePrimary);
+  const queryTokens = tokenizeText(query);
+  let overlap = 0;
+  queryTokens.forEach((token) => {
+    if (primaryTokens.has(token)) {
+      overlap += 1;
+    }
+  });
+
+  const vectorScore = Number(primaryIncident.vectorScore ?? 0);
+  const hasExplicitIncidentRequest = Boolean(requestedIncidentId);
+  const weakSemanticMatch = !hasExplicitIncidentRequest && vectorScore < 0.18 && overlap < 2;
+
+  if (weakSemanticMatch) {
+    const candidates = incidents.slice(0, 3).map((incident) => {
+      const candidateGuest = guestsById.get(incident.guestId);
+      const candidateGuestName = candidateGuest?.fullName || candidateGuest?.name || incident.guestId || 'Unknown guest';
+      const candidateId = incident.incidentId || incident.id || incident.docId || 'unknown';
+      return `- ${candidateId} | ${candidateGuestName} | ${incident.type || 'unknown'} / ${incident.category || 'unknown'} | ${String(incident.severity || 'unknown').toUpperCase()}`;
+    }).join('\n');
+
+    return [
+      '### Guest Recovery Assessment',
+      '',
+      'I could not confidently map your question to one specific incident.',
+      '',
+      'I do not want to fabricate a recommendation for the wrong case.',
+      '',
+      '**Closest incident candidates**',
+      candidates || '- No close candidates found.',
+      '',
+      'Please provide the incident ID, guest name, or a bit more detail and I will target the exact incident you asked about.',
+    ].join('\n');
   }
 
   const currentPlan = proposal?.actions?.length
@@ -641,13 +738,15 @@ router.get('/action-proposals', async (req, res) => {
       const proposalFetches = await Promise.allSettled(
         orderedProposalIds.map(async (proposalId) => {
           const doc = await db.actionProposals.get(proposalId);
-          return { _key: proposalId, ...(doc.content as Record<string, unknown>) };
+          return {
+            _key: proposalId,
+            ...(doc.content as Record<string, unknown> & { createdAt?: string }),
+          };
         }),
       );
 
       const proposals = proposalFetches
-        .filter((result): result is PromiseFulfilledResult<Record<string, unknown>> => result.status === 'fulfilled')
-        .map((result) => result.value)
+        .flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []))
         .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
 
       return res.json(proposals);
@@ -663,6 +762,8 @@ router.post('/agent-query', async (req, res) => {
   try {
     const query = String(req.body?.query || '').trim();
     const agentType = String(req.body?.agentType || 'guest-recovery');
+    const requestedIncidentId = extractIncidentIdFromQuery(query);
+    const requestedGuestId = extractGuestIdFromQuery(query);
 
     if (!query) {
       return res.status(400).json({ error: 'query required' });
@@ -672,31 +773,105 @@ router.post('/agent-query', async (req, res) => {
       return res.status(400).json({ error: 'agent-query currently supports guest-recovery only' });
     }
 
-    const { embedding, embeddingSource } = await resolveQueryEmbedding(query);
-    const { hits, successfulIndexes, attemptedIndexes } = await searchIncidentsByVectorIndexes(embedding, 8);
+    let embeddingSource: 'openai' | 'incident-corpus-fallback' | 'guest-direct' = 'guest-direct';
+    let successfulIndexes: string[] = [];
+    let attemptedIndexes: string[] = [];
 
     let incidents: any[] = [];
     let retrievalMode: 'vector-index' | 'vector-fallback' = 'vector-index';
+    let guestLookupStatus: 'found' | 'not-found' | undefined;
 
-    if (hits.length > 0) {
-      const keys = hits.map(hit => hit.id);
-      const scoreById = new Map(hits.map(hit => [hit.id, hit.score]));
-
-      const incidentDocs = await db.cluster.query(
-        `SELECT META(i).id AS docId, i.* FROM voyageops.guests.incidents i USE KEYS $keys`,
-        { parameters: { keys } },
+    if (requestedGuestId) {
+      const requestedGuestResult = await db.cluster.query(
+        `
+        SELECT g.*
+        FROM voyageops.guests.guests g
+        WHERE g.guestId = $guestId OR LOWER(META(g).id) = $guestId
+        LIMIT 1
+        `,
+        {
+          parameters: { guestId: requestedGuestId },
+          timeout: 10000,
+        },
       );
 
-      incidents = incidentDocs.rows
-        .map((row: any) => ({ ...row, vectorScore: Number(scoreById.get(row.docId) || 0) }))
-        .sort((a: any, b: any) => b.vectorScore - a.vectorScore)
-        .slice(0, 8);
-    } else {
+      guestLookupStatus = requestedGuestResult.rows.length > 0 ? 'found' : 'not-found';
+
       retrievalMode = 'vector-fallback';
-      incidents = await searchIncidentsByVectorFieldsFallback(embedding, 8);
+      const guestIncidentResult = await db.cluster.query(
+        `
+        SELECT META(i).id AS docId, i.*
+        FROM voyageops.guests.incidents i
+        WHERE LOWER(i.guestId) = $guestId
+        ORDER BY i.updatedAt DESC
+        LIMIT 8
+        `,
+        {
+          parameters: { guestId: requestedGuestId },
+          timeout: 10000,
+        },
+      );
+
+      incidents = guestIncidentResult.rows.map((row: any) => ({ ...row, vectorScore: 1 }));
+    } else {
+      const embeddingResult = await resolveQueryEmbedding(query);
+      embeddingSource = embeddingResult.embeddingSource;
+      const embedding = embeddingResult.embedding;
+      const vectorHits = await searchIncidentsByVectorIndexes(embedding, 8);
+      successfulIndexes = vectorHits.successfulIndexes;
+      attemptedIndexes = vectorHits.attemptedIndexes;
+
+      if (vectorHits.hits.length > 0) {
+        const keys = vectorHits.hits.map(hit => hit.id);
+        const scoreById = new Map(vectorHits.hits.map(hit => [hit.id, hit.score]));
+
+        const incidentDocs = await db.cluster.query(
+          `SELECT META(i).id AS docId, i.* FROM voyageops.guests.incidents i USE KEYS $keys`,
+          { parameters: { keys } },
+        );
+
+        incidents = incidentDocs.rows
+          .map((row: any) => ({ ...row, vectorScore: Number(scoreById.get(row.docId) || 0) }))
+          .sort((a: any, b: any) => b.vectorScore - a.vectorScore)
+          .slice(0, 8);
+      } else {
+        retrievalMode = 'vector-fallback';
+        incidents = await searchIncidentsByVectorFieldsFallback(embedding, 8);
+      }
+    }
+
+    let incidentLookupStatus: 'found' | 'not-found' | undefined;
+    if (requestedIncidentId) {
+      const exactIncidentResult = await db.cluster.query(
+        `
+        SELECT META(i).id AS docId, i.*
+        FROM voyageops.guests.incidents i
+        WHERE i.incidentId = $incidentId OR META(i).id = $incidentId
+        LIMIT 1
+        `,
+        {
+          parameters: { incidentId: requestedIncidentId },
+          timeout: 10000,
+        },
+      );
+
+      if (exactIncidentResult.rows.length > 0) {
+        incidentLookupStatus = 'found';
+        const exact = { ...exactIncidentResult.rows[0], vectorScore: 1 };
+        const exactId = String(exact.docId || exact.incidentId || exact.id || '');
+        const existingIds = new Set(incidents.map((incident: any) => String(incident.docId || incident.incidentId || incident.id || '')));
+        if (!existingIds.has(exactId)) {
+          incidents = [exact, ...incidents].slice(0, 8);
+        }
+      } else {
+        incidentLookupStatus = 'not-found';
+      }
     }
 
     const guestIds = Array.from(new Set(incidents.map((i: any) => i.guestId).filter(Boolean)));
+    if (requestedGuestId && !guestIds.includes(requestedGuestId)) {
+      guestIds.push(requestedGuestId);
+    }
     const guestsById = new Map<string, any>();
     if (guestIds.length > 0) {
       const guestsResult = await db.cluster.query(
@@ -732,6 +907,10 @@ router.post('/agent-query', async (req, res) => {
       guestsById,
       retrievalMode,
       proposal,
+      requestedIncidentId,
+      incidentLookupStatus,
+      requestedGuestId,
+      guestLookupStatus,
     });
 
     res.json({
@@ -740,6 +919,10 @@ router.post('/agent-query', async (req, res) => {
       metadata: {
         embeddingSource,
         retrievalMode,
+        requestedIncidentId,
+        incidentLookupStatus,
+        requestedGuestId,
+        guestLookupStatus,
         indexesAttempted: attemptedIndexes,
         indexesUsed: successfulIndexes,
       },
@@ -789,7 +972,7 @@ router.get('/timeline/:agentType', async (req, res) => {
 // API: Ship info
 router.get('/ship-info', async (req, res) => {
   try {
-    const candidateKeys = ['ship_info::current', 'IOS-001'];
+    const candidateKeys = ['ship_info::current'];
 
     for (const key of candidateKeys) {
       try {

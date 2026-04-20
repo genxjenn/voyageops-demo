@@ -133,7 +133,7 @@ function normalizeGuest(guest: Record<string, unknown>): GuestProfile {
   const guestId = String(guest.guestId ?? guest.id ?? "");
   const fullName = String(guest.fullName ?? guest.name ?? "Unknown guest");
   const loyaltyTier = String(guest.loyaltyTier ?? "GOLD").toUpperCase();
-  const sailingHistory = parseVoyageNumber(guest.sailingHistory);
+  const sailingHistory = parseVoyageNumber(guest.sailingHistory ?? guest.sailingHistoryAvg);
 
   return {
     guestId,

@@ -362,7 +362,7 @@ WITH {"dimension": 1536, "similarity": "L2", "description": "IVF,SQ8"};
 | `excursions` | `voyageops.excursions.excursions` | SQL++ filtered by status |
 | `venues` | `voyageops.operations.venues` | SQL++ or Sub-Document API for IoT |
 | `agentRecommendations` | `voyageops.intelligence.recommendations` | SQL++ filtered by agentType |
-| `shipInfo` | `voyageops.intelligence.ship_info` | KV `get("ship_info::current")` |
+| `shipInfo` | `voyageops.intelligence.ship_info` | KV `get("current")` |
 | `dashboardKPIs` | `voyageops.intelligence.kpis` | KV get or Analytics aggregation |
 | Timeline arrays | `voyageops.intelligence.timeline_events` | SQL++ filtered by agentType, ordered by timestamp |
 
