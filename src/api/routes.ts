@@ -1,4 +1,5 @@
 // src/api/routes.ts
+import 'dotenv/config';
 import express from 'express';
 import type { Response } from 'express';
 import { db } from '../lib/couchbase.ts';
@@ -112,15 +113,22 @@ function tokenizeText(input: string) {
   );
 }
 
+function normalizeQueryForIdParsing(query: string) {
+  // Normalize common unicode dash variants so IDs like IN_IOS–114_216 parse reliably.
+  return query.replace(/[\u2010-\u2015\u2212]/g, '-');
+}
+
 function extractIncidentIdFromQuery(query: string) {
   // Supports IDs like IN_IOS-114_237 and IN_IOS-114_237::guest-recovery
-  const match = query.match(/\bIN_[A-Z0-9-]+_[A-Z0-9-]+(?:::[A-Za-z0-9_-]+)?\b/i);
+  const normalized = normalizeQueryForIdParsing(query);
+  const match = normalized.match(/\bIN_[A-Z0-9-]+_[A-Z0-9-]+(?:::[A-Za-z0-9_-]+)?\b/i);
   return match ? match[0] : undefined;
 }
 
 function extractGuestIdFromQuery(query: string) {
   // Supports IDs like guest222
-  const match = query.match(/\bguest\d+\b/i);
+  const normalized = normalizeQueryForIdParsing(query);
+  const match = normalized.match(/\bguest\d+\b/i);
   return match ? match[0].toLowerCase() : undefined;
 }
 
@@ -280,10 +288,10 @@ function buildGuestRecoveryChatResponse(params: {
   if (/(vip|upgrade|premium|concierge|white glove|personal)/.test(normalizedQuery)) {
     operatorIntent.push('raise the service level for a higher-touch recovery');
   }
-  if (/(urgent|fast|expedite|immediately|asap)/.test(normalizedQuery)) {
+  if (/(urgent|fast|faster|expedite|expedited|accelerat\w*|immediately|asap)/.test(normalizedQuery)) {
     operatorIntent.push('accelerate outreach and service recovery timing');
   }
-  if (/(call|follow up|follow-up|apology|contact)/.test(normalizedQuery)) {
+  if (/(outreach|call|follow up|follow-up|followup|apology|contact|reach out|reach-out)/.test(normalizedQuery)) {
     operatorIntent.push('add a direct human follow-up step');
   }
 
@@ -334,8 +342,23 @@ function buildGuestRecoveryChatResponse(params: {
     operatorIntent.length > 0 ? `Operator guidance detected: ${operatorIntent.join('; ')}.` : 'No refinement preference was stated, so I would keep the current service-recovery posture.',
   ].filter(Boolean);
 
-  const nextMove = operatorIntent.length > 0
-    ? `If you want, I can refine the visible plan toward these goals: ${operatorIntent.join('; ')}.`
+  const adjustmentBullets: string[] = [];
+  if (operatorIntent.includes('accelerate outreach and service recovery timing')) {
+    adjustmentBullets.push('Open outreach within 15 minutes with a named owner and callback window.');
+    adjustmentBullets.push('Set a 60-minute status checkpoint and escalate to duty manager if unresolved.');
+  }
+  if (operatorIntent.includes('add a direct human follow-up step')) {
+    adjustmentBullets.push('Add a concierge or guest-services follow-up call after the first update.');
+  }
+  if (operatorIntent.includes('keep compensation proportional and cost-aware')) {
+    adjustmentBullets.push('Use a lower-cost goodwill option first, then escalate only if sentiment remains negative.');
+  }
+  if (operatorIntent.includes('raise the service level for a higher-touch recovery')) {
+    adjustmentBullets.push('Upgrade to a higher-touch recovery owner and premium service script.');
+  }
+
+  const nextMove = adjustmentBullets.length > 0
+    ? adjustmentBullets.map((bullet) => `- ${bullet}`).join('\n')
     : 'If you want to steer the plan, ask for a lower-cost, faster, or more VIP-style recovery and I will adapt the recommendation framing.';
 
   return [
@@ -761,9 +784,10 @@ router.get('/action-proposals', async (req, res) => {
 router.post('/agent-query', async (req, res) => {
   try {
     const query = String(req.body?.query || '').trim();
+    const normalizedQuery = normalizeQueryForIdParsing(query);
     const agentType = String(req.body?.agentType || 'guest-recovery');
-    const requestedIncidentId = extractIncidentIdFromQuery(query);
-    const requestedGuestId = extractGuestIdFromQuery(query);
+    const requestedIncidentId = extractIncidentIdFromQuery(normalizedQuery);
+    const requestedGuestId = extractGuestIdFromQuery(normalizedQuery);
 
     if (!query) {
       return res.status(400).json({ error: 'query required' });
@@ -858,11 +882,8 @@ router.post('/agent-query', async (req, res) => {
       if (exactIncidentResult.rows.length > 0) {
         incidentLookupStatus = 'found';
         const exact = { ...exactIncidentResult.rows[0], vectorScore: 1 };
-        const exactId = String(exact.docId || exact.incidentId || exact.id || '');
-        const existingIds = new Set(incidents.map((incident: any) => String(incident.docId || incident.incidentId || incident.id || '')));
-        if (!existingIds.has(exactId)) {
-          incidents = [exact, ...incidents].slice(0, 8);
-        }
+        // When an explicit incident is requested and found, constrain to that incident only.
+        incidents = [exact];
       } else {
         incidentLookupStatus = 'not-found';
       }
@@ -886,8 +907,11 @@ router.post('/agent-query', async (req, res) => {
     }
 
     const topIncidentId = incidents[0]?.incidentId || incidents[0]?.id || incidents[0]?.docId;
+    const proposalIncidentId = requestedIncidentId && incidentLookupStatus === 'found'
+      ? requestedIncidentId
+      : topIncidentId;
     let proposal: any | undefined;
-    if (topIncidentId) {
+    if (proposalIncidentId) {
       const proposalResult = await db.cluster.query(
         `
         SELECT p.*
@@ -896,7 +920,7 @@ router.post('/agent-query', async (req, res) => {
         ORDER BY p.createdAt DESC
         LIMIT 1
         `,
-        { parameters: { incidentId: topIncidentId }, timeout: 10000 },
+        { parameters: { incidentId: proposalIncidentId }, timeout: 10000 },
       );
       proposal = proposalResult.rows[0];
     }

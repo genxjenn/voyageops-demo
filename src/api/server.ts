@@ -1,14 +1,23 @@
 // server.ts
-import 'dotenv/config';
+import dotenv from 'dotenv';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import express from 'express';
-import routes from './routes.ts';
 import { initCouchbase, db } from '../lib/couchbase.ts';
+
+const serverFile = fileURLToPath(import.meta.url);
+const serverDir = path.dirname(serverFile);
+const defaultEnvPath = path.resolve(serverDir, '../../.env');
+
+// Prefer explicit DOTENV_CONFIG_PATH when set; otherwise always load repo-root .env.
+dotenv.config({ path: process.env.DOTENV_CONFIG_PATH || defaultEnvPath, quiet: true });
 
 async function startServer() {
   try {
     // Initialize Couchbase connection
     await initCouchbase();
     console.log('✅ Connected to Couchbase Capella');
+    const { default: routes } = await import('./routes.ts');
 
     const app = express();
     const port = Number(process.env.PORT || 5173);
