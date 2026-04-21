@@ -4,9 +4,9 @@ AI-powered operational intelligence platform for cruise line operations. Demonst
 
 ## Agents
 
-- **Guest Service Recovery Agent** — Detect service failures, correlate guest data, and recommend recovery actions
-- **Port & Excursion Disruption Agent** — Monitor itinerary disruptions, assess impact, and coordinate rebooking
-- **Onboard Operations Optimization Agent** — Monitor venue demand, staffing, and maintenance to optimize guest experience
+- **Guest Service Recovery Agent** — Detect service failures, correlate guest data, and recommend recovery actions (uses Couchbase for data)
+- **Port & Excursion Disruption Agent** — Monitor itinerary disruptions, assess impact, and coordinate rebooking (Mock Data only)
+- **Onboard Operations Optimization Agent** — Monitor venue demand, staffing, and maintenance to optimize guest experience (Mock Data only)
 
 ## Tech Stack
 
