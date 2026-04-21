@@ -53,3 +53,6 @@ ON voyageops.intelligence.kpis;
 
 CREATE PRIMARY INDEX voCore_pi_ship_info
 ON voyageops.intelligence.ship_info;
+
+CREATE INDEX ix_bookings_guestid_voyage
+ON voyageops.guests.bookings(guestId, voyageNumber);
