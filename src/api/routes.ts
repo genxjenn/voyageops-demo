@@ -23,6 +23,24 @@ interface WorkerLogEntry {
 const workerLogs: WorkerLogEntry[] = [];
 const sseClients = new Set<Response>();
 
+interface ChatTurn {
+  sessionId: string;
+  role: 'user' | 'assistant';
+  message: string;
+  createdAt: string;
+  agentType: string;
+  messageId?: string;
+  incidentId?: string;
+  guestId?: string;
+}
+
+interface ChatSessionState {
+  sessionId: string;
+  agentType: string;
+  lastIncidentId?: string;
+  lastGuestId?: string;
+}
+
 function broadcastLog(entry: WorkerLogEntry) {
   const payload = `data: ${JSON.stringify(entry)}\n\n`;
   for (const client of sseClients) {
@@ -132,6 +150,127 @@ function extractGuestIdFromQuery(query: string) {
   return match ? match[0].toLowerCase() : undefined;
 }
 
+function buildChatMessageDocId(sessionId: string) {
+  return `chatmsg::${sessionId}::${Date.now()}::${Math.random().toString(36).slice(2, 8)}`;
+}
+
+async function loadRecentChatTurns(sessionId: string, agentType: string, limit = 8): Promise<ChatTurn[]> {
+  try {
+    const result = await db.cluster.query(
+      `
+      SELECT m.sessionId, m.role, m.message, m.createdAt, m.agentType, m.messageId, m.incidentId, m.guestId
+      FROM voyageops.agent.chat_messages m
+      WHERE m.sessionId = $sessionId
+        AND m.agentType = $agentType
+      ORDER BY m.createdAt DESC, m.messageId DESC
+      LIMIT $limit
+      `,
+      {
+        parameters: { sessionId, agentType, limit },
+        timeout: 10000,
+      },
+    );
+
+    return (result.rows as any[])
+      .map((row) => {
+        const role: ChatTurn['role'] = row.role === 'assistant' ? 'assistant' : 'user';
+        return {
+          sessionId: String(row.sessionId || sessionId),
+          role,
+          message: String(row.message || ''),
+          createdAt: String(row.createdAt || new Date().toISOString()),
+          agentType: String(row.agentType || agentType),
+          messageId: row.messageId ? String(row.messageId) : undefined,
+          incidentId: row.incidentId ? String(row.incidentId) : undefined,
+          guestId: row.guestId ? String(row.guestId) : undefined,
+        };
+      })
+      .reverse();
+  } catch (error) {
+    console.warn('Chat memory unavailable (chat_messages query failed):', error instanceof Error ? error.message : String(error));
+    return [];
+  }
+}
+
+async function loadChatSessionState(sessionId: string, agentType: string): Promise<ChatSessionState | null> {
+  try {
+    const doc = await db.bucket.scope('agent').collection('chat_sessions').get(sessionId);
+    const content = (doc.content as Record<string, unknown>) || {};
+    if (String(content.agentType || '') !== agentType) {
+      return null;
+    }
+    return {
+      sessionId,
+      agentType,
+      lastIncidentId: content.lastIncidentId ? String(content.lastIncidentId) : undefined,
+      lastGuestId: content.lastGuestId ? String(content.lastGuestId) : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function persistChatTurn(turn: ChatTurn) {
+  const messageDocId = buildChatMessageDocId(turn.sessionId);
+  const now = new Date().toISOString();
+
+  try {
+    await db.bucket.scope('agent').collection('chat_messages').upsert(messageDocId, {
+      messageId: messageDocId,
+      sessionId: turn.sessionId,
+      role: turn.role,
+      message: turn.message,
+      createdAt: turn.createdAt,
+      agentType: turn.agentType,
+      incidentId: turn.incidentId,
+      guestId: turn.guestId,
+    });
+
+    const sessionsCollection = db.bucket.scope('agent').collection('chat_sessions');
+    let existing: Record<string, unknown> = {};
+    try {
+      const existingDoc = await sessionsCollection.get(turn.sessionId);
+      existing = (existingDoc.content as Record<string, unknown>) || {};
+    } catch {
+      existing = {};
+    }
+
+    await sessionsCollection.upsert(turn.sessionId, {
+      ...existing,
+      sessionId: turn.sessionId,
+      agentType: turn.agentType,
+      createdAt: String(existing.createdAt || now),
+      updatedAt: now,
+      lastIncidentId: turn.incidentId || existing.lastIncidentId,
+      lastGuestId: turn.guestId || existing.lastGuestId,
+      lastRole: turn.role,
+      lastMessagePreview: turn.message.slice(0, 280),
+    });
+  } catch (error) {
+    console.warn('Chat memory unavailable (chat_messages/chat_sessions upsert failed):', error instanceof Error ? error.message : String(error));
+  }
+}
+
+function resolveIncidentIdFromTurns(recentTurns: ChatTurn[]) {
+  for (let i = recentTurns.length - 1; i >= 0; i -= 1) {
+    const turn = recentTurns[i];
+    if (turn.incidentId) return turn.incidentId;
+    const parsed = extractIncidentIdFromQuery(turn.message || '');
+    if (parsed) return parsed;
+  }
+  return undefined;
+}
+
+function resolveGuestIdFromTurns(recentTurns: ChatTurn[]) {
+  for (let i = recentTurns.length - 1; i >= 0; i -= 1) {
+    const turn = recentTurns[i];
+    if (turn.guestId) return turn.guestId;
+    const parsed = extractGuestIdFromQuery(turn.message || '');
+    if (parsed) return parsed;
+  }
+  return undefined;
+}
+
 async function getQueryEmbeddingFromIncidentCorpus(query: string) {
   const tokens = tokenizeText(query);
   const corpusQuery = `
@@ -209,6 +348,7 @@ function buildGuestRecoveryChatResponse(params: {
   incidents: any[];
   guestsById: Map<string, any>;
   retrievalMode: 'vector-index' | 'vector-fallback';
+  recentTurns?: ChatTurn[];
   proposal?: any;
   requestedIncidentId?: string;
   incidentLookupStatus?: 'found' | 'not-found';
@@ -220,6 +360,7 @@ function buildGuestRecoveryChatResponse(params: {
     incidents,
     guestsById,
     proposal,
+    recentTurns,
     requestedIncidentId,
     incidentLookupStatus,
     requestedGuestId,
@@ -280,7 +421,11 @@ function buildGuestRecoveryChatResponse(params: {
   const spend = formatCurrency(guest?.onboardSpend ?? 0);
   const topThemes = Array.from(new Set(incidents.slice(0, 3).map((incident) => `${incident.type || 'unknown'} / ${incident.category || 'unknown'}`)));
   const operatorIntent: string[] = [];
-  const normalizedQuery = query.toLowerCase();
+  const recentContextText = (recentTurns || [])
+    .slice(-6)
+    .map((turn) => turn.message)
+    .join(' ');
+  const normalizedQuery = `${recentContextText} ${query}`.toLowerCase();
 
   if (/(budget|cheaper|lower|cost|smaller gesture|less expensive)/.test(normalizedQuery)) {
     operatorIntent.push('keep compensation proportional and cost-aware');
@@ -365,6 +510,7 @@ function buildGuestRecoveryChatResponse(params: {
     '### Guest Recovery Assessment',
     '',
     `I am focusing on **${guestName}** and incident **${primaryIncident.incidentId || primaryIncident.id || primaryIncident.docId || 'unknown'}**.`,
+    `_${primaryIncident.type || 'Unknown type'} / ${primaryIncident.category || 'Unknown category'}_${primaryIncident.description ? ` — ${primaryIncident.description}` : ''}`,
     '',
     '**What I am weighing**',
     reasoningBullets.map((bullet) => `- ${bullet}`).join('\n'),
@@ -786,8 +932,26 @@ router.post('/agent-query', async (req, res) => {
     const query = String(req.body?.query || '').trim();
     const normalizedQuery = normalizeQueryForIdParsing(query);
     const agentType = String(req.body?.agentType || 'guest-recovery');
-    const requestedIncidentId = extractIncidentIdFromQuery(normalizedQuery);
-    const requestedGuestId = extractGuestIdFromQuery(normalizedQuery);
+    const sessionIdInput = String(req.body?.sessionId || '').trim();
+    const sessionId = sessionIdInput || `guest-recovery::${Date.now()}::${Math.random().toString(36).slice(2, 7)}`;
+    const recentTurns = await loadRecentChatTurns(sessionId, agentType, 8);
+    const chatSessionState = await loadChatSessionState(sessionId, agentType);
+
+    let requestedIncidentId = extractIncidentIdFromQuery(normalizedQuery);
+    let requestedGuestId = extractGuestIdFromQuery(normalizedQuery);
+
+    if (!requestedIncidentId) {
+      requestedIncidentId = resolveIncidentIdFromTurns(recentTurns);
+    }
+    if (!requestedIncidentId) {
+      requestedIncidentId = chatSessionState?.lastIncidentId;
+    }
+    if (!requestedGuestId) {
+      requestedGuestId = resolveGuestIdFromTurns(recentTurns);
+    }
+    if (!requestedGuestId) {
+      requestedGuestId = chatSessionState?.lastGuestId;
+    }
 
     if (!query) {
       return res.status(400).json({ error: 'query required' });
@@ -796,6 +960,16 @@ router.post('/agent-query', async (req, res) => {
     if (agentType !== 'guest-recovery') {
       return res.status(400).json({ error: 'agent-query currently supports guest-recovery only' });
     }
+
+    await persistChatTurn({
+      sessionId,
+      role: 'user',
+      message: query,
+      createdAt: new Date().toISOString(),
+      agentType,
+      incidentId: requestedIncidentId,
+      guestId: requestedGuestId,
+    });
 
     let embeddingSource: 'openai' | 'incident-corpus-fallback' | 'guest-direct' = 'guest-direct';
     let successfulIndexes: string[] = [];
@@ -930,6 +1104,7 @@ router.post('/agent-query', async (req, res) => {
       incidents,
       guestsById,
       retrievalMode,
+      recentTurns,
       proposal,
       requestedIncidentId,
       incidentLookupStatus,
@@ -937,10 +1112,26 @@ router.post('/agent-query', async (req, res) => {
       guestLookupStatus,
     });
 
+    const responseIncidentId = String(incidents[0]?.incidentId || incidents[0]?.id || incidents[0]?.docId || requestedIncidentId || '');
+    const responseGuestId = String(incidents[0]?.guestId || requestedGuestId || '');
+    await persistChatTurn({
+      sessionId,
+      role: 'assistant',
+      message: response,
+      createdAt: new Date().toISOString(),
+      agentType,
+      incidentId: responseIncidentId || undefined,
+      guestId: responseGuestId || undefined,
+    });
+
     res.json({
       response,
       incidents,
       metadata: {
+        sessionId,
+        recentTurnsUsed: recentTurns.length,
+        sessionAnchorIncidentId: chatSessionState?.lastIncidentId,
+        sessionAnchorGuestId: chatSessionState?.lastGuestId,
         embeddingSource,
         retrievalMode,
         requestedIncidentId,
