@@ -98,6 +98,8 @@ interface AgentQueryResponse {
   response: string;
   incidents?: IncidentRecord[];
   metadata?: {
+    sessionId?: string;
+    recentTurnsUsed?: number;
     retrievalMode?: string;
     indexesAttempted?: string[];
     indexesUsed?: string[];
@@ -260,8 +262,11 @@ export const api = {
     return rows.map(normalizeGuest);
   },
   guestWithIncidents: (id: string) => fetchJson<GuestWithIncidents>(`/api/guests/${id}`),
-  agentQuery: (query: string, agentType: "guest-recovery" | "port-disruption" | "onboard-ops" | "general") =>
-    postJson<AgentQueryResponse>("/api/agent-query", { query, agentType }),
+  agentQuery: (
+    query: string,
+    agentType: "guest-recovery" | "port-disruption" | "onboard-ops" | "general",
+    sessionId?: string,
+  ) => postJson<AgentQueryResponse>("/api/agent-query", { query, agentType, sessionId }),
   actionProposals: (guestId?: string, incidentId?: string) =>
     fetchJson<ActionProposal[]>("/api/action-proposals", { guestId, incidentId }),
 };

@@ -187,6 +187,7 @@ def _fetch_incident_context(cluster: Cluster, incident_id: str) -> dict[str, Any
            i.category,
            i.type,
            i.status,
+                     i.vector_desc_incidents,
            g.loyaltyTier,
            g.onboardSpend,
            (
@@ -232,6 +233,21 @@ def _create_incident_embedding(client: OpenAI, settings: Settings, description: 
         raise AgentWorkerError("embedding", "Embedding response did not include a usable vector") from error
 
 
+def _extract_incident_vector_from_context(context: Mapping[str, Any]) -> list[float] | None:
+    vector = context.get("vector_desc_incidents")
+    if not isinstance(vector, list) or not vector:
+        return None
+
+    normalized: list[float] = []
+    for value in vector:
+        if isinstance(value, (int, float)):
+            normalized.append(float(value))
+        else:
+            return None
+
+    return normalized if normalized else None
+
+
 def _normalize_incident_type_key(value: Any) -> str:
     return str(value or "").strip().lower().replace("_", "-").replace(" ", "-")
 
@@ -249,7 +265,13 @@ def _find_playbook_id_from_context(cluster: Cluster, context: Mapping[str, Any])
     FROM voyageops.agent.playbooks p
     WHERE p.active = true
       AND LOWER(REPLACE(REPLACE(TRIM(p.incidentType), " ", "-"), "_", "-")) = $incidentType
-      AND LOWER(TRIM(p.severity)) = $severity
+        AND (
+            (IS_STRING(p.severity) AND LOWER(TRIM(p.severity)) = $severity)
+            OR (
+                IS_ARRAY(p.severity)
+                AND ANY sev IN p.severity SATISFIES LOWER(TRIM(sev)) = $severity END
+            )
+            )
       AND (
             (IS_STRING(p.loyaltyTier) AND LOWER(TRIM(p.loyaltyTier)) IN ["any", $loyaltyTier])
             OR (
@@ -911,7 +933,6 @@ def run_guest_recovery_agent(
         )
 
         context = _fetch_incident_context(resolved_cluster, str(run_document["incidentId"]))
-        incident_vector = _create_incident_embedding(openai_client, settings, str(context["description"]))
         playbook_id = _find_playbook_id_from_context(resolved_cluster, context)
         if playbook_id:
             _emit_worker_metric(
@@ -922,6 +943,21 @@ def run_guest_recovery_agent(
                 loyaltyTier=str(context.get("loyaltyTier") or ""),
             )
         else:
+            incident_vector = _extract_incident_vector_from_context(context)
+            if incident_vector:
+                _emit_worker_metric(
+                    "playbook_vector_source",
+                    source="incident_document",
+                    vectorLength=len(incident_vector),
+                    incidentId=str(context.get("incidentId") or ""),
+                )
+            else:
+                incident_vector = _create_incident_embedding(openai_client, settings, str(context["description"]))
+                _emit_worker_metric(
+                    "playbook_vector_source",
+                    source="openai_runtime",
+                    incidentId=str(context.get("incidentId") or ""),
+                )
             playbook_id = _find_playbook_id(resolved_cluster, settings.playbook_index_name, incident_vector)
         actions, policies = _fetch_actions_and_policies(resolved_cluster, playbook_id, str(context["loyaltyTier"]))
         recommendation = _generate_recommendation(openai_client, settings, context, actions, policies)

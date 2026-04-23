@@ -319,6 +319,7 @@ export function AgentChat({ agentType = "general", className, onCommand }: Agent
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
+  const [chatSessionId] = useState(() => `${agentType}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const handleSendRef = useRef<(text?: string) => void>(() => {});
@@ -439,7 +440,7 @@ export function AgentChat({ agentType = "general", className, onCommand }: Agent
     let response = "";
     if (agentType === "guest-recovery") {
       try {
-        const vectorResult = await api.agentQuery(messageText, agentType);
+        const vectorResult = await api.agentQuery(messageText, agentType, chatSessionId);
         response = vectorResult.response;
       } catch {
         response = getAgentResponse(messageText, agentType, liveData);
@@ -453,7 +454,7 @@ export function AgentChat({ agentType = "general", className, onCommand }: Agent
         onCommand?.(messageText);
       });
     }, 400);
-  }, [input, isStreaming, agentType, simulateStreaming, liveData, onCommand]);
+  }, [input, isStreaming, agentType, chatSessionId, simulateStreaming, liveData, onCommand]);
 
   // Keep ref in sync and listen for guided demo events
   handleSendRef.current = handleSend;

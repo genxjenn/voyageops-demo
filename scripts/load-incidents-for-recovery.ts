@@ -17,41 +17,79 @@ type ParsedArgs = {
   filePath: string;
   mode: 'insert' | 'upsert';
   backfillEmbeddings: boolean;
+  showHelp: boolean;
 };
 
 function parseArgs(argv: string[]): ParsedArgs {
   let filePath = '';
   let mode: 'insert' | 'upsert' = 'upsert';
   let backfillEmbeddings = true;
+  const showHelp = argv.includes('--help') || argv.includes('-h');
 
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
+  if (!showHelp) {
+    for (let i = 0; i < argv.length; i += 1) {
+      const arg = argv[i];
 
-    if (arg === '--file' || arg === '-f') {
-      filePath = argv[i + 1] ?? '';
-      i += 1;
-      continue;
+      if (arg === '--file' || arg === '-f') {
+        filePath = argv[i + 1] ?? '';
+        i += 1;
+        continue;
+      }
+
+      if (arg === '--insert-only') {
+        mode = 'insert';
+        continue;
+      }
+
+      if (arg === '--no-embeddings') {
+        backfillEmbeddings = false;
+      }
     }
 
-    if (arg === '--insert-only') {
-      mode = 'insert';
-      continue;
+    if (!filePath.trim()) {
+      throw new Error('Missing required --file argument. Example: npm run demo:load-incidents-for-recovery -- --file data/my-incidents.ndjson');
     }
-
-    if (arg === '--no-embeddings') {
-      backfillEmbeddings = false;
-    }
-  }
-
-  if (!filePath.trim()) {
-    throw new Error('Missing required --file argument. Example: npm run demo:load-incidents-for-recovery -- --file data/my-incidents.ndjson');
   }
 
   return {
-    filePath: path.resolve(process.cwd(), filePath.trim()),
+    filePath: filePath.trim() ? path.resolve(process.cwd(), filePath.trim()) : '',
     mode,
     backfillEmbeddings,
+    showHelp,
   };
+}
+
+function printUsage(): void {
+  console.log('Usage: npm run demo:load-incidents-for-recovery -- --file <path> [options]');
+  console.log('');
+  console.log('Required:');
+  console.log('  --file, -f <path>    Path to incident file (JSON object, JSON array, or NDJSON)');
+  console.log('');
+  console.log('Options:');
+  console.log('  --insert-only        Fail if incident document already exists (default: upsert/overwrite)');
+  console.log('  --no-embeddings      Skip OpenAI vector generation for category/type/description fields');
+  console.log('  --help, -h           Show this help message');
+  console.log('');
+  console.log('Examples:');
+  console.log('  Load a single incident JSON file and auto-generate embeddings:');
+  console.log('    npm run demo:load-incidents-for-recovery -- --file data/my-incident.json');
+  console.log('');
+  console.log('  Load an NDJSON file without overwriting existing docs:');
+  console.log('    npm run demo:load-incidents-for-recovery -- --file data/incidents.ndjson --insert-only');
+  console.log('');
+  console.log('  Load and skip embedding generation (faster, requires vectors already in file):');
+  console.log('    npm run demo:load-incidents-for-recovery -- --file data/incidents.ndjson --no-embeddings');
+  console.log('');
+  console.log('File formats accepted:');
+  console.log('  • Single JSON object  { "incidentId": "...", "guestId": "...", ... }');
+  console.log('  • JSON array          [{ ... }, { ... }]');
+  console.log('  • NDJSON              one JSON object per line');
+  console.log('');
+  console.log('Required fields per incident: incidentId, guestId');
+  console.log('Required for embedding generation: category, type, description');
+  console.log('');
+  console.log('After loading, incidents are automatically enqueued as pending agent_runs.');
+  console.log('Start the worker if not already running: npm run demo:worker');
 }
 
 function parseIncidentFile(raw: string): IncidentDoc[] {
@@ -246,6 +284,12 @@ async function enqueueRuns(incidents: IncidentDoc[]): Promise<number> {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+
+  if (args.showHelp) {
+    printUsage();
+    return;
+  }
+
   await initCouchbase();
 
   const raw = await readFile(args.filePath, 'utf8');

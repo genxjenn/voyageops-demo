@@ -9,8 +9,8 @@ type PlaybookSeed = {
   title: string;
   description: string;
   agentType: AgentType;
-  incidentType: string;
-  severity: 'low' | 'medium' | 'high' | 'critical';
+  incidentType: string | string[];
+  severity: 'low' | 'medium' | 'high' | 'critical' | Array<'low' | 'medium' | 'high' | 'critical'>;
   loyaltyTier: string | string[];
   actionIds: string[];
   active: boolean;
@@ -97,6 +97,46 @@ const playbookSeeds: PlaybookSeed[] = [
     actionIds: ['gr_excursion_partial_refund', 'gr_bridge_followup_call'],
     active: true,
   },
+    {
+    playbookId: 'pb_gr_excursion_cancelled',
+    title: 'Excursion cancelled compensation',
+    description: 'Compensate cancelled excursions while preserving sentiment for future bookings.',
+    agentType: 'guest-recovery',
+    incidentType: 'excursion-cancelled',
+    severity: 'high',
+    loyaltyTier: 'any',
+    actionIds: ['gr_excursion_cancelled_refund', 'gr_bridge_followup_call'],
+    active: true,
+  },
+  {
+    playbookId: 'pb_gr_show_cancelled_vip',
+    title: 'Show cancelled complaint - VIP only',
+    description:
+      'High-touch service recovery for show cancellations, limited to DIAMOND and ELITE PLATINUM guests who file a complaint.',
+    agentType: 'guest-recovery',
+    incidentType: 'show-cancelled',
+    severity: ['low', 'medium', 'high', 'critical'],
+    loyaltyTier: ['diamond', 'elite platinum'],
+    actionIds: [
+      'gr_bridge_followup_call',
+      'gr_concierge_priority_vip',
+      'gr_onboard_credit_premium_vip',
+      'gr_future_cruise_credit_vip',
+    ],
+    active: true,
+  },
+  {
+    playbookId: 'pb_gr_show_cancelled_standard',
+    title: 'Show cancelled standard recovery',
+    description:
+      'Simple service recovery for standard-tier guests impacted by a cancelled show, centered on a personal apology and a small goodwill gift.',
+    agentType: 'guest-recovery',
+    incidentType: 'show-cancelled',
+    severity: 'medium',
+    loyaltyTier: ['gold', 'emerald', 'platinum'],
+    actionIds: ['gr_show_cancelled_apology_gift_std'],
+    active: true,
+  },
   {
     playbookId: 'pb_gr_vip_escalation',
     title: 'VIP escalation containment',
@@ -152,14 +192,14 @@ const playbookSeeds: PlaybookSeed[] = [
     ],
     active: true,
   },
-  // ── Top-5 incident coverage: maint-failure ───────────────────────────────
+  // ── Top-5 incident coverage: maintenance ───────────────────────────────
   {
-    playbookId: 'pb_gr_maint_failure_vip',
+    playbookId: 'pb_gr_maintenance_vip',
     title: 'Critical cabin failure — VIP recovery',
     description:
       'Urgent relocation and premium compensation for DIAMOND and ELITE PLATINUM guests affected by critical cabin mechanical or system failures such as HVAC, plumbing, or electrical outages.',
     agentType: 'guest-recovery',
-    incidentType: 'maint-failure',
+    incidentType: 'maintenance',
     severity: 'critical',
     loyaltyTier: ['diamond', 'elite platinum'],
     actionIds: [
@@ -172,6 +212,24 @@ const playbookSeeds: PlaybookSeed[] = [
     ],
     active: true,
   },
+  {
+    playbookId: 'pb_gr_maintenance_std',
+    title: 'Cabin maintenance standard recovery',
+    description:
+      'Standard recovery for GOLD, EMERALD, and PLATINUM guests affected by cabin mechanical issues, focused on room remediation and practical comfort upgrades.',
+    agentType: 'guest-recovery',
+    incidentType: 'maintenance',
+    severity: ['medium', 'high'],
+    loyaltyTier: ['gold', 'emerald', 'platinum'],
+    actionIds: [
+      'gr_room_suite_upgrade_comp',
+      'gr_suite_upgrade_ultra_std',
+      'gr_cabin_location_upgrade_std',
+      'gr_balcony_upgrade_std',
+      'gr_interconnecting_rooms_std',
+    ],
+    active: true,
+  },
   // ── Top-5 incident coverage: excursion-disruption (VIP) ──────────────────
   {
     playbookId: 'pb_gr_excursion_disruption_vip',
@@ -179,7 +237,7 @@ const playbookSeeds: PlaybookSeed[] = [
     description:
       'Elevated shore excursion recovery with premium rebooking, priority tender access, and future cruise compensation for DIAMOND, ELITE PLATINUM, and EMERALD loyalty guests.',
     agentType: 'guest-recovery',
-    incidentType: 'excursion-disruption',
+    incidentType: ['excursion-disruption', 'excursion-cancelled'],
     severity: 'high',
     loyaltyTier: ['diamond', 'elite platinum', 'emerald'],
     actionIds: [
@@ -325,6 +383,17 @@ const policyRuleSeeds: PolicyRuleSeed[] = [
     conditions: { maxRefundPct: 0.5 },
     directives: { documentReasonCode: true },
   },
+    {
+    ruleId: 'pr_gr_refund_cancelled_excursion_guardrail',
+    agentType: 'guest-recovery',
+    name: 'Excursion refund guardrail',
+    incidentType: 'excursion-cancelled',
+    severity: 'high',
+    priority: 95,
+    enabled: true,
+    conditions: { maxRefundPct: 1.0 },
+    directives: { documentReasonCode: true },
+  },
   {
     ruleId: 'pr_gr_repeat_incident_boost',
     agentType: 'guest-recovery',
@@ -414,12 +483,19 @@ function buildPolicyRuleEmbeddingText(rule: PolicyRuleSeed) {
 }
 
 function buildPlaybookEmbeddingText(playbook: PlaybookSeed) {
+  const incidentType = Array.isArray(playbook.incidentType)
+    ? playbook.incidentType.join(',')
+    : playbook.incidentType;
+  const severity = Array.isArray(playbook.severity)
+    ? playbook.severity.join(',')
+    : playbook.severity;
+
   return [
     `playbookId: ${playbook.playbookId}`,
     `title: ${playbook.title}`,
     `description: ${playbook.description}`,
-    `incidentType: ${playbook.incidentType}`,
-    `severity: ${playbook.severity}`,
+    `incidentType: ${incidentType}`,
+    `severity: ${severity}`,
     `loyaltyTier: ${playbook.loyaltyTier}`,
     `actionIds: ${playbook.actionIds.join(',')}`,
   ].join(' | ');

@@ -11,6 +11,8 @@ CREATE COLLECTION voyageops.agent.agent_runs;
 CREATE COLLECTION voyageops.agent.action_proposals;
 CREATE COLLECTION voyageops.agent.action_executions;
 CREATE COLLECTION voyageops.agent.outcomes;
+CREATE COLLECTION voyageops.agent.chat_sessions;
+CREATE COLLECTION voyageops.agent.chat_messages;
 
 -- ============================================================================
 -- 2) Primary Indexes (optional but useful for ad hoc debugging)
@@ -37,6 +39,12 @@ ON voyageops.agent.action_executions;
 
 CREATE PRIMARY INDEX voAgent_pi_outcomes
 ON voyageops.agent.outcomes;
+
+CREATE PRIMARY INDEX voAgent_pi_chat_sessions
+ON voyageops.agent.chat_sessions;
+
+CREATE PRIMARY INDEX voAgent_pi_chat_messages
+ON voyageops.agent.chat_messages;
 
 -- ============================================================================
 -- 3) Operational GSI Indexes - TBD determined after testing with volume of data and query patterns
