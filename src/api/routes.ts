@@ -120,6 +120,37 @@ const VECTOR_INDEX_CONFIG = [
   },
 ];
 const OPENAI_EMBEDDING_MODEL = getRequiredEnv('OPENAI_EMBEDDING_MODEL');
+const OPENAI_CHAT_MODEL = process.env.OPENAI_CHAT_MODEL || 'gpt-4o-mini';
+
+interface PolicyRuleRecord {
+  ruleId: string;
+  name: string;
+  description?: string;
+  priority?: number;
+  incidentType?: string;
+  severity?: string;
+  constraints?: Record<string, unknown>;
+}
+
+interface ActionCatalogRecord {
+  actionId: string;
+  label: string;
+  description?: string;
+  incidentType?: string | string[];
+  incidentCategory?: string | string[];
+  loyaltyTier?: string | string[];
+}
+
+interface PlanAdjustmentResponse {
+  assessmentHeadline: string;
+  whatIAmWeighing: string[];
+  currentPlanOnFile: string[];
+  howIWouldAdjust: string[];
+  followUpActions: string[];
+  riskNotes: string[];
+  confidence: number;
+  citations: string[];
+}
 
 function tokenizeText(input: string) {
   return new Set(
@@ -129,6 +160,538 @@ function tokenizeText(input: string) {
       .split(/\s+/)
       .filter(Boolean),
   );
+}
+
+function normalizeLower(input: unknown) {
+  return String(input || '').trim().toLowerCase();
+}
+
+function includesMatch(field: unknown, expected: string) {
+  const target = normalizeLower(expected);
+  if (!target) return true;
+  if (Array.isArray(field)) {
+    return field.some((entry) => normalizeLower(entry) === target || normalizeLower(entry) === 'any');
+  }
+  const normalizedField = normalizeLower(field);
+  return !normalizedField || normalizedField === target || normalizedField === 'any';
+}
+
+function toStringArray(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => String(item || '').trim())
+    .filter(Boolean);
+}
+
+function toBoundedBulletList(value: unknown, minItems = 1, maxItems = 6) {
+  const items = toStringArray(value).slice(0, maxItems);
+  if (items.length < minItems) {
+    throw new Error(`Expected at least ${minItems} bullet item(s)`);
+  }
+  return items;
+}
+
+function parseConfidence(value: unknown) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) {
+    throw new Error('LLM confidence must be numeric');
+  }
+  return Math.min(1, Math.max(0, num));
+}
+
+function validatePlanAdjustmentPayload(
+  payload: unknown,
+  allowedActionIds: Set<string>,
+  availableCitationIds: Set<string>,
+  options?: {
+    incidentType?: string;
+    hasDefinedActions?: boolean;
+    hasDefinedPlaybooks?: boolean;
+  },
+) {
+  const data = (payload as Record<string, unknown>) || {};
+  const assessmentHeadline = String(data.assessmentHeadline || '').trim();
+  if (!assessmentHeadline) {
+    throw new Error('LLM payload missing assessmentHeadline');
+  }
+
+  const citations = toBoundedBulletList(data.citations, 1, 12);
+
+  const currentPlanOnFile = toBoundedBulletList(data.currentPlanOnFile, 1, 8);
+  const howIWouldAdjust = toBoundedBulletList(data.howIWouldAdjust, 1, 8);
+  const whatIAmWeighing = toBoundedBulletList(data.whatIAmWeighing, 2, 8);
+  const followUpActions = toBoundedBulletList(data.followUpActions, 1, 8);
+  const riskNotes = toBoundedBulletList(data.riskNotes, 1, 8);
+
+  const referencedActions = howIWouldAdjust
+    .map((line) => {
+      const m = line.match(/\[(gr_[a-z0-9_\-]+)\]/i);
+      return m ? m[1] : undefined;
+    })
+    .filter((value): value is string => Boolean(value));
+  const unknownActions = referencedActions.filter((actionId) => !allowedActionIds.has(actionId));
+  if (unknownActions.length > 0) {
+    throw new Error(`LLM payload referenced unknown action IDs: ${unknownActions.join(', ')}`);
+  }
+
+  const incidentType = normalizeLower(options?.incidentType);
+  const hasDefinedActions = Boolean(options?.hasDefinedActions);
+  const hasDefinedPlaybooks = Boolean(options?.hasDefinedPlaybooks);
+  const combinedText = [
+    assessmentHeadline,
+    ...currentPlanOnFile,
+    ...howIWouldAdjust,
+    ...followUpActions,
+    ...riskNotes,
+  ].join(' ').toLowerCase();
+
+  if (incidentType === 'safety' && !hasDefinedActions) {
+    if (!/no\s+defined\s+action|no\s+catalog\s+action|no\s+existing\s+action/.test(combinedText)) {
+      throw new Error('Safety response must explicitly state that no defined actions exist for this incident type');
+    }
+
+    if (/(future\s+cruise\s+credit|refund|voucher|compensation|upgrade|discount|onboard\s+credit)/.test(combinedText)) {
+      throw new Error('Safety response cannot recommend compensation-style actions when no defined actions exist');
+    }
+  }
+
+  if (!hasDefinedActions && !/no\s+defined\s+action|no\s+catalog\s+action|no\s+existing\s+action/.test(combinedText)) {
+    throw new Error('Response must explicitly state that no defined catalog actions exist for this incident context');
+  }
+
+  if (!hasDefinedPlaybooks && !/no\s+defined\s+playbook|no\s+existing\s+playbook|not\s+covered\s+by\s+playbook/.test(combinedText)) {
+    throw new Error('Response must explicitly state that no defined playbook exists for this incident context');
+  }
+
+  return {
+    assessmentHeadline,
+    whatIAmWeighing,
+    currentPlanOnFile,
+    howIWouldAdjust,
+    followUpActions,
+    riskNotes,
+    confidence: parseConfidence(data.confidence),
+    citations,
+  } as PlanAdjustmentResponse;
+}
+
+function renderPlanAdjustmentMarkdown(params: {
+  incident: any;
+  guest: any;
+  response: PlanAdjustmentResponse;
+}) {
+  const { incident, guest, response } = params;
+  const guestName = guest?.fullName || guest?.name || incident?.guestId || 'Unknown guest';
+  const incidentId = incident?.incidentId || incident?.id || incident?.docId || 'unknown';
+
+  return [
+    '### Guest Recovery Assessment',
+    '',
+    `I am focusing on **${guestName}** and incident **${incidentId}**.`,
+    `_${incident?.type || 'Unknown type'} / ${incident?.category || 'Unknown category'}_${incident?.description ? ` — ${incident.description}` : ''}`,
+    '',
+    `**${response.assessmentHeadline}**`,
+    '',
+    '**What I am weighing**',
+    response.whatIAmWeighing.map((line) => `- ${line}`).join('\n'),
+    '',
+    '**Current plan on file**',
+    response.currentPlanOnFile.map((line) => `- ${line}`).join('\n'),
+    '',
+    '**How I would adjust it**',
+    response.howIWouldAdjust.map((line) => `- ${line}`).join('\n'),
+    '',
+    '**Follow-up actions**',
+    response.followUpActions.map((line) => `- ${line}`).join('\n'),
+    '',
+    '**Risk notes**',
+    response.riskNotes.map((line) => `- ${line}`).join('\n'),
+    '',
+    `**Confidence:** ${Math.round(response.confidence * 100)}%`,
+    `**Citations:** ${response.citations.join(', ')}`,
+  ].join('\n');
+}
+
+function renderGuardrailedFallbackMarkdown(params: {
+  incident: any;
+  guest: any;
+  proposal?: any;
+  hasDefinedActions: boolean;
+  hasDefinedPlaybooks: boolean;
+  llmFailureDetail: string;
+}) {
+  const {
+    incident,
+    guest,
+    proposal,
+    hasDefinedActions,
+    hasDefinedPlaybooks,
+    llmFailureDetail,
+  } = params;
+
+  const guestName = guest?.fullName || guest?.name || incident?.guestId || 'Unknown guest';
+  const incidentId = incident?.incidentId || incident?.id || incident?.docId || 'unknown';
+  const incidentType = normalizeLower(incident?.type) || 'unknown';
+
+  const currentPlan = proposal?.actions?.length
+    ? proposal.actions.map((action: any) => `- ${action.label}${action.estimatedValue ? ` (${formatCurrency(action.estimatedValue)})` : ''}`).join('\n')
+    : '- No worker-generated proposal exists yet for this incident.';
+
+  const adjustmentBullets = !hasDefinedActions
+    ? [
+      'No defined catalog actions exist for this incident context; use manual safety-containment workflow only.',
+      'Assign a duty manager and open immediate guest welfare outreach with frequent status check-ins.',
+      'Escalate to operations governance to define and approve a new safety action/playbook entry for this pattern.',
+    ]
+    : [
+      'Use currently allowed actions and keep recommendations tightly scoped to approved catalog entries only.',
+      'Prioritize rapid outreach ownership and documented checkpoints until the incident is stabilized.',
+    ];
+
+  const followUpBullets = !hasDefinedPlaybooks
+    ? [
+      'There is no defined playbook for this incident type/context; proceed with manual incident command oversight.',
+      'Capture final timeline, decisions, and outcomes so a formal playbook can be authored after closure.',
+    ]
+    : [
+      'Apply the relevant playbook sequence and log each step transition in the incident record.',
+    ];
+
+  return [
+    '### Guest Recovery Assessment',
+    '',
+    `I am focusing on **${guestName}** and incident **${incidentId}**.`,
+    `_${incident?.type || 'Unknown type'} / ${incident?.category || 'Unknown category'}_${incident?.description ? ` — ${incident.description}` : ''}`,
+    '',
+    '**Fallback mode was used because the LLM output did not pass backend guardrails.**',
+    '',
+    '**What I am weighing**',
+    `- Incident type context: ${incidentType}.`,
+    `- LLM validation failure detail: ${llmFailureDetail}.`,
+    '',
+    '**Current plan on file**',
+    currentPlan,
+    '',
+    '**How I would adjust it**',
+    adjustmentBullets.map((line) => `- ${line}`).join('\n'),
+    '',
+    '**Follow-up actions**',
+    followUpBullets.map((line) => `- ${line}`).join('\n'),
+    '',
+    '**Risk notes**',
+    '- Avoid compensation-style recommendations when no defined safety catalog actions exist.',
+    '- Use manual containment and governance escalation until catalog/playbook coverage is added.',
+    '',
+    '**Confidence:** 62%',
+  ].join('\n');
+}
+
+async function loadPolicyRulesForContext(incident: any) {
+  const incidentType = String(incident?.type || '').trim();
+  const severity = String(incident?.severity || '').trim();
+  const result = await db.cluster.query(
+    `
+    SELECT r.ruleId, r.name, r.description, r.priority, r.incidentType, r.severity, r.constraints
+    FROM voyageops.agent.policy_rules r
+    WHERE r.enabled = true
+      AND LOWER(r.agentType) = 'guest-recovery'
+      AND (r.incidentType IS MISSING OR LOWER(r.incidentType) = LOWER($incidentType))
+      AND (r.severity IS MISSING OR LOWER(r.severity) = LOWER($severity))
+    ORDER BY r.priority DESC
+    LIMIT 25
+    `,
+    {
+      parameters: { incidentType, severity },
+      timeout: 10000,
+    },
+  );
+  return (result.rows as any[]).map((row) => ({
+    ruleId: String(row.ruleId || ''),
+    name: String(row.name || ''),
+    description: row.description ? String(row.description) : undefined,
+    priority: Number(row.priority || 0),
+    incidentType: row.incidentType ? String(row.incidentType) : undefined,
+    severity: row.severity ? String(row.severity) : undefined,
+    constraints: typeof row.constraints === 'object' && row.constraints ? row.constraints as Record<string, unknown> : undefined,
+  })) as PolicyRuleRecord[];
+}
+
+async function loadAllowedActionsForContext(incident: any, guest: any) {
+  const incidentType = String(incident?.type || '').trim();
+  const incidentCategory = String(incident?.category || '').trim();
+  const loyaltyTier = String(guest?.loyaltyTier || '').trim();
+
+  const result = await db.cluster.query(
+    `
+    SELECT a.actionId, a.label, a.description, a.incidentType, a.incidentCategory, a.loyaltyTier
+    FROM voyageops.agent.action_catalog a
+    WHERE a.active = true
+    LIMIT 300
+    `,
+    { timeout: 10000 },
+  );
+
+  return (result.rows as any[])
+    .filter((row) => {
+      const typeField = row.incidentType;
+      if (Array.isArray(typeField)) {
+        return typeField.length > 0;
+      }
+      return Boolean(String(typeField || '').trim());
+    })
+    .filter((row) => includesMatch(row.incidentType, incidentType))
+    .filter((row) => includesMatch(row.incidentCategory, incidentCategory))
+    .filter((row) => includesMatch(row.loyaltyTier, loyaltyTier))
+    .map((row) => ({
+      actionId: String(row.actionId || ''),
+      label: String(row.label || ''),
+      description: row.description ? String(row.description) : undefined,
+      incidentType: row.incidentType as string | string[] | undefined,
+      incidentCategory: row.incidentCategory as string | string[] | undefined,
+      loyaltyTier: row.loyaltyTier as string | string[] | undefined,
+    }))
+    .filter((row) => Boolean(row.actionId));
+}
+
+async function loadPlaybookIdsForContext(incident: any, guest: any) {
+  const incidentType = String(incident?.type || '').trim();
+  const severity = String(incident?.severity || '').trim();
+  const loyaltyTier = String(guest?.loyaltyTier || '').trim();
+
+  const result = await db.cluster.query(
+    `
+    SELECT META(pb).id AS playbookId, pb.incidentType, pb.severity, pb.loyaltyTier
+    FROM voyageops.agent.playbooks pb
+    WHERE pb.active = true
+    LIMIT 300
+    `,
+    { timeout: 10000 },
+  );
+
+  return (result.rows as any[])
+    .filter((row) => {
+      const typeField = row.incidentType;
+      if (Array.isArray(typeField)) {
+        return typeField.length > 0;
+      }
+      return Boolean(String(typeField || '').trim());
+    })
+    .filter((row) => includesMatch(row.incidentType, incidentType))
+    .filter((row) => includesMatch(row.severity, severity))
+    .filter((row) => includesMatch(row.loyaltyTier, loyaltyTier))
+    .map((row) => String(row.playbookId || '').trim())
+    .filter(Boolean);
+}
+
+async function runPlanAdjustmentLlm(params: {
+  query: string;
+  incident: any;
+  guest: any;
+  proposal: any;
+  recentTurns: ChatTurn[];
+  policyRules: PolicyRuleRecord[];
+  allowedActions: ActionCatalogRecord[];
+  playbookIds: string[];
+  requestedIncidentId?: string;
+}) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error('OPENAI_API_KEY is missing');
+  }
+
+  const allowedActionIds = new Set(params.allowedActions.map((action) => action.actionId));
+  const proposalActions = Array.isArray(params.proposal?.actions)
+    ? params.proposal.actions.map((action: any) => ({
+      actionId: String(action?.actionId || ''),
+      label: String(action?.label || ''),
+      description: action?.description ? String(action.description) : undefined,
+      estimatedValue: action?.estimatedValue,
+    }))
+    : [];
+  const compatibleProposalActions = proposalActions.filter((action) => allowedActionIds.has(action.actionId));
+  const hasDefinedActions = params.allowedActions.length > 0;
+  const hasDefinedPlaybooks = params.playbookIds.length > 0;
+  const incidentType = String(params.incident?.type || '').trim();
+
+  const contextBundle = {
+    chatMemory: {
+      sessionId: params.recentTurns[0]?.sessionId || undefined,
+      chatSessionDocId: params.recentTurns[0]?.sessionId || undefined,
+      relatedChatMessageDocIds: params.recentTurns
+        .map((turn) => turn.messageId)
+        .filter((messageId): messageId is string => Boolean(messageId)),
+    },
+    requestedIncidentId: params.requestedIncidentId,
+    incomingUserMessage: params.query,
+    incident: {
+      incidentId: params.incident?.incidentId || params.incident?.id || params.incident?.docId,
+      guestId: params.incident?.guestId,
+      type: params.incident?.type,
+      category: params.incident?.category,
+      severity: params.incident?.severity,
+      status: params.incident?.status,
+      description: params.incident?.description,
+      createdAt: params.incident?.createdAt,
+      updatedAt: params.incident?.updatedAt,
+    },
+    guest: {
+      guestId: params.guest?.guestId,
+      fullName: params.guest?.fullName || params.guest?.name,
+      loyaltyTier: params.guest?.loyaltyTier,
+      onboardSpend: params.guest?.onboardSpend,
+      bookingId: params.guest?.bookingId,
+    },
+    proposal: params.proposal
+      ? {
+        proposalId: params.proposal?.proposalId,
+        status: params.proposal?.status,
+        summary: params.proposal?.summary,
+        reasoning: params.proposal?.reasoning,
+        compatibility: {
+          hasDefinedActions,
+          compatibleActionCount: compatibleProposalActions.length,
+          incompatibleActionCount: Math.max(0, proposalActions.length - compatibleProposalActions.length),
+          note: compatibleProposalActions.length > 0
+            ? 'proposal contains compatible action(s) for current catalog constraints'
+            : 'proposal actions are not compatible with currently defined catalog actions for this incident context',
+        },
+        actions: compatibleProposalActions,
+      }
+      : null,
+    guardrails: {
+      incidentType,
+      hasDefinedActions,
+      hasDefinedPlaybooks,
+      mustStateNoDefinedActionsWhenEmpty: normalizeLower(incidentType) === 'safety' && !hasDefinedActions,
+      mustStateNoDefinedPlaybooksWhenEmpty: !hasDefinedPlaybooks,
+      prohibitedWhenNoDefinedActions: [
+        'future cruise credit',
+        'refund',
+        'voucher',
+        'compensation',
+        'upgrade',
+        'onboard credit',
+      ],
+    },
+    recentTurns: params.recentTurns.slice(-10).map((turn) => ({
+      role: turn.role,
+      message: turn.message,
+      incidentId: turn.incidentId,
+      guestId: turn.guestId,
+      createdAt: turn.createdAt,
+      messageId: turn.messageId,
+    })),
+    policyRules: params.policyRules,
+    playbookIds: params.playbookIds,
+    allowedActions: params.allowedActions,
+  };
+
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: OPENAI_CHAT_MODEL,
+      temperature: 0.2,
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'guest_recovery_plan_adjustment',
+          strict: true,
+          schema: {
+            type: 'object',
+            additionalProperties: false,
+            required: [
+              'assessmentHeadline',
+              'whatIAmWeighing',
+              'currentPlanOnFile',
+              'howIWouldAdjust',
+              'followUpActions',
+              'riskNotes',
+              'confidence',
+              'citations',
+            ],
+            properties: {
+              assessmentHeadline: { type: 'string' },
+              whatIAmWeighing: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 8 },
+              currentPlanOnFile: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 8 },
+              howIWouldAdjust: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 8 },
+              followUpActions: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 8 },
+              riskNotes: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 8 },
+              confidence: { type: 'number', minimum: 0, maximum: 1 },
+              citations: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 12 },
+            },
+          },
+        },
+      },
+      messages: [
+        {
+          role: 'system',
+          content: [
+            'You are a Guest Recovery operations copilot.',
+            'Use only the provided JSON context. Do not invent guest, incident, policy, proposal, or action facts.',
+            'If referencing a known actionId, include it in square brackets like [gr_action_id].',
+            'Only reference action IDs from allowedActions.',
+            'Citations must include IDs from the provided context (incidentId, proposalId, ruleId, actionId, chat_session doc id, chat_message doc id).',
+            'If guardrails.mustStateNoDefinedActionsWhenEmpty is true, explicitly state there are no defined catalog actions for this incident context and provide safety-containment steps only.',
+            'If guardrails.mustStateNoDefinedPlaybooksWhenEmpty is true, explicitly state there is no defined playbook for this incident type/context.',
+            'When no defined actions are available, do not recommend compensation-style actions such as credits, refunds, vouchers, or upgrades.',
+            'When incident types are not covered in action catalog or playbooks, call that out directly before giving any next-step guidance.',
+          ].join(' '),
+        },
+        {
+          role: 'user',
+          content: JSON.stringify(contextBundle),
+        },
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`LLM API failed: ${response.status} ${body}`);
+  }
+
+  const payload = await response.json();
+  const content = payload?.choices?.[0]?.message?.content;
+  if (!content || typeof content !== 'string') {
+    throw new Error('LLM API returned empty response content');
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    throw new Error('LLM API did not return valid JSON');
+  }
+
+  const availableCitationIds = new Set<string>();
+  const incidentId = String(contextBundle.incident.incidentId || '').trim();
+  if (incidentId) availableCitationIds.add(incidentId);
+  const guestId = String(contextBundle.incident.guestId || '').trim();
+  if (guestId) availableCitationIds.add(guestId);
+  const chatSessionDocId = String(contextBundle.chatMemory.chatSessionDocId || '').trim();
+  if (chatSessionDocId) availableCitationIds.add(chatSessionDocId);
+  const proposalId = String(contextBundle.proposal?.proposalId || '').trim();
+  if (proposalId) availableCitationIds.add(proposalId);
+  contextBundle.policyRules.forEach((rule) => { if (rule.ruleId) availableCitationIds.add(rule.ruleId); });
+  contextBundle.playbookIds.forEach((playbookId) => { if (playbookId) availableCitationIds.add(playbookId); });
+  contextBundle.allowedActions.forEach((action) => { if (action.actionId) availableCitationIds.add(action.actionId); });
+  contextBundle.recentTurns.forEach((turn) => { if (turn.messageId) availableCitationIds.add(String(turn.messageId)); });
+  contextBundle.chatMemory.relatedChatMessageDocIds.forEach((messageId) => availableCitationIds.add(String(messageId)));
+
+  const validated = validatePlanAdjustmentPayload(parsed, allowedActionIds, availableCitationIds, {
+    incidentType: contextBundle.incident.type,
+    hasDefinedActions,
+    hasDefinedPlaybooks,
+  });
+
+  return {
+    validated,
+    contextBundle,
+  };
 }
 
 function normalizeQueryForIdParsing(query: string) {
@@ -928,12 +1491,15 @@ router.get('/action-proposals', async (req, res) => {
 
 // API: Vector-powered agent query
 router.post('/agent-query', async (req, res) => {
+  let failurePhase = 'init';
   try {
+    failurePhase = 'parse-request';
     const query = String(req.body?.query || '').trim();
     const normalizedQuery = normalizeQueryForIdParsing(query);
     const agentType = String(req.body?.agentType || 'guest-recovery');
     const sessionIdInput = String(req.body?.sessionId || '').trim();
     const sessionId = sessionIdInput || `guest-recovery::${Date.now()}::${Math.random().toString(36).slice(2, 7)}`;
+    failurePhase = 'load-chat-memory';
     const recentTurns = await loadRecentChatTurns(sessionId, agentType, 8);
     const chatSessionState = await loadChatSessionState(sessionId, agentType);
 
@@ -961,6 +1527,7 @@ router.post('/agent-query', async (req, res) => {
       return res.status(400).json({ error: 'agent-query currently supports guest-recovery only' });
     }
 
+    failurePhase = 'persist-user-turn';
     await persistChatTurn({
       sessionId,
       role: 'user',
@@ -980,6 +1547,7 @@ router.post('/agent-query', async (req, res) => {
     let guestLookupStatus: 'found' | 'not-found' | undefined;
 
     if (requestedGuestId) {
+      failurePhase = 'lookup-guest-and-incidents';
       const requestedGuestResult = await db.cluster.query(
         `
         SELECT g.*
@@ -1012,6 +1580,7 @@ router.post('/agent-query', async (req, res) => {
 
       incidents = guestIncidentResult.rows.map((row: any) => ({ ...row, vectorScore: 1 }));
     } else {
+      failurePhase = 'vector-retrieval';
       const embeddingResult = await resolveQueryEmbedding(query);
       embeddingSource = embeddingResult.embeddingSource;
       const embedding = embeddingResult.embedding;
@@ -1040,6 +1609,7 @@ router.post('/agent-query', async (req, res) => {
 
     let incidentLookupStatus: 'found' | 'not-found' | undefined;
     if (requestedIncidentId) {
+      failurePhase = 'incident-lookup';
       const exactIncidentResult = await db.cluster.query(
         `
         SELECT META(i).id AS docId, i.*
@@ -1063,6 +1633,7 @@ router.post('/agent-query', async (req, res) => {
       }
     }
 
+    failurePhase = 'load-guests';
     const guestIds = Array.from(new Set(incidents.map((i: any) => i.guestId).filter(Boolean)));
     if (requestedGuestId && !guestIds.includes(requestedGuestId)) {
       guestIds.push(requestedGuestId);
@@ -1080,6 +1651,7 @@ router.post('/agent-query', async (req, res) => {
       });
     }
 
+    failurePhase = 'load-proposal';
     const topIncidentId = incidents[0]?.incidentId || incidents[0]?.id || incidents[0]?.docId;
     const proposalIncidentId = requestedIncidentId && incidentLookupStatus === 'found'
       ? requestedIncidentId
@@ -1099,39 +1671,119 @@ router.post('/agent-query', async (req, res) => {
       proposal = proposalResult.rows[0];
     }
 
-    const response = buildGuestRecoveryChatResponse({
-      query,
-      incidents,
-      guestsById,
-      retrievalMode,
-      recentTurns,
-      proposal,
-      requestedIncidentId,
-      incidentLookupStatus,
-      requestedGuestId,
-      guestLookupStatus,
-    });
+    const primaryIncident = incidents[0];
+    if (!primaryIncident) {
+      return res.status(404).json({
+        error: 'No incident could be resolved for this request context',
+        metadata: {
+          sessionId,
+          recentTurnsUsed: recentTurns.length,
+          retrievalMode,
+          requestedIncidentId,
+          incidentLookupStatus,
+          requestedGuestId,
+          guestLookupStatus,
+          indexesAttempted: attemptedIndexes,
+          indexesUsed: successfulIndexes,
+        },
+      });
+    }
+
+    const primaryGuest = guestsById.get(primaryIncident.guestId);
+    if (!primaryGuest) {
+      return res.status(404).json({
+        error: 'Incident resolved but guest profile could not be resolved',
+        metadata: {
+          sessionId,
+          recentTurnsUsed: recentTurns.length,
+          retrievalMode,
+          requestedIncidentId,
+          incidentLookupStatus,
+          requestedGuestId,
+          guestLookupStatus,
+          indexesAttempted: attemptedIndexes,
+          indexesUsed: successfulIndexes,
+        },
+      });
+    }
+
+    failurePhase = 'load-policy-action-playbook-context';
+    const policyRules = await loadPolicyRulesForContext(primaryIncident);
+    const allowedActions = await loadAllowedActionsForContext(primaryIncident, primaryGuest);
+    const playbookIds = await loadPlaybookIdsForContext(primaryIncident, primaryGuest);
+
+    failurePhase = 'llm-plan-adjustment';
+    const hasDefinedActions = allowedActions.length > 0;
+    const hasDefinedPlaybooks = playbookIds.length > 0;
+    let llmFallbackUsed = false;
+    let llmFailureDetail: string | undefined;
+    let responseCitations: string[] = [];
+    let response = '';
+
+    try {
+      const llmResult = await runPlanAdjustmentLlm({
+        query,
+        incident: primaryIncident,
+        guest: primaryGuest,
+        proposal,
+        recentTurns,
+        policyRules,
+        allowedActions,
+        playbookIds,
+        requestedIncidentId,
+      });
+
+      response = renderPlanAdjustmentMarkdown({
+        incident: primaryIncident,
+        guest: primaryGuest,
+        response: llmResult.validated,
+      });
+      responseCitations = llmResult.validated.citations;
+    } catch (llmError) {
+      llmFallbackUsed = true;
+      llmFailureDetail = llmError instanceof Error ? llmError.message : String(llmError);
+      console.warn('LLM plan adjustment failed, using deterministic fallback:', llmFailureDetail);
+
+      response = renderGuardrailedFallbackMarkdown({
+        incident: primaryIncident,
+        guest: primaryGuest,
+        proposal,
+        hasDefinedActions,
+        hasDefinedPlaybooks,
+        llmFailureDetail,
+      });
+
+      const incidentCitation = String(primaryIncident?.incidentId || primaryIncident?.id || primaryIncident?.docId || '').trim();
+      const guestCitation = String(primaryIncident?.guestId || '').trim();
+      responseCitations = [incidentCitation, guestCitation].filter(Boolean);
+    }
+
+    const debugSignature = '[debug-signature: routes.ts@agent-query-v2026-04-23b]';
+    const responseWithDebug = `${response}\n\n${debugSignature}`;
 
     const responseIncidentId = String(incidents[0]?.incidentId || incidents[0]?.id || incidents[0]?.docId || requestedIncidentId || '');
     const responseGuestId = String(incidents[0]?.guestId || requestedGuestId || '');
+    failurePhase = 'persist-assistant-turn';
     await persistChatTurn({
       sessionId,
       role: 'assistant',
-      message: response,
+      message: responseWithDebug,
       createdAt: new Date().toISOString(),
       agentType,
       incidentId: responseIncidentId || undefined,
       guestId: responseGuestId || undefined,
     });
 
+    failurePhase = 'respond-success';
     res.json({
-      response,
+      response: responseWithDebug,
       incidents,
       metadata: {
         sessionId,
         recentTurnsUsed: recentTurns.length,
         sessionAnchorIncidentId: chatSessionState?.lastIncidentId,
         sessionAnchorGuestId: chatSessionState?.lastGuestId,
+        llmModel: OPENAI_CHAT_MODEL,
         embeddingSource,
         retrievalMode,
         requestedIncidentId,
@@ -1140,11 +1792,39 @@ router.post('/agent-query', async (req, res) => {
         guestLookupStatus,
         indexesAttempted: attemptedIndexes,
         indexesUsed: successfulIndexes,
+        contextUsed: {
+          incidentId: responseIncidentId || undefined,
+          guestId: responseGuestId || undefined,
+          proposalId: proposal?.proposalId ? String(proposal.proposalId) : undefined,
+          hasDefinedActions,
+          hasDefinedPlaybooks,
+          chatSessionDocId: recentTurns[0]?.sessionId || sessionId,
+          recentTurnMessageIds: recentTurns.map((turn) => turn.messageId).filter(Boolean),
+          policyRuleIds: policyRules.map((rule) => rule.ruleId).filter(Boolean),
+          playbookIds,
+          allowedActionIds: allowedActions.map((action) => action.actionId).filter(Boolean),
+          citations: responseCitations,
+          llmFallbackUsed,
+          llmFailureDetail,
+        },
       },
     });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ error: 'Failed to run vector agent query' });
+    const detail = error instanceof Error ? error.message : String(error);
+    const debugSignature = '[debug-signature: routes.ts@agent-query-v2026-04-23c-error-detail]';
+    const status =
+      detail.toLowerCase().includes('llm payload') ||
+      detail.toLowerCase().includes('must explicitly state') ||
+      detail.toLowerCase().includes('unknown action ids')
+        ? 422
+        : 500;
+
+    res.status(status).json({
+      error: `Failed to run vector agent query (${failurePhase})`,
+      detail,
+      debugSignature,
+    });
   }
 });
 

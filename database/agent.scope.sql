@@ -50,6 +50,19 @@ ON voyageops.agent.chat_messages;
 -- 3) Operational GSI Indexes - TBD determined after testing with volume of data and query patterns
 -- ============================================================================
 
+CREATE INDEX voAgent_idx_agent_runs_status_createdAt
+ON voyageops.agent.agent_runs(status, createdAt);
+
+-- Proposal lookup query used by guest-recovery chat/API:
+--   WHERE p.incidentId = $incidentId ORDER BY p.createdAt DESC LIMIT 1
+CREATE INDEX voAgent_idx_action_proposals_incident_createdAt
+ON voyageops.agent.action_proposals(incidentId, createdAt DESC);
+
+-- Chat memory lookup query used by /api/agent-query:
+--   WHERE m.sessionId = $sessionId AND m.agentType = $agentType
+--   ORDER BY m.createdAt DESC, m.messageId DESC LIMIT $limit
+CREATE INDEX voAgent_idx_chat_messages_session_agent_created_message
+ON voyageops.agent.chat_messages(sessionId, agentType, createdAt DESC, messageId DESC);
 
 -- ============================================================================
 -- 4) Vector Indexes (SQL++ Vector Index / GSI style)

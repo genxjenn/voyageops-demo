@@ -1,6 +1,6 @@
 import { AgentChat } from "@/components/AgentChat";
 import { StatusBadge } from "@/components/StatusBadge";
-import { User, Crown, CreditCard, Ship, MessageSquare, Star } from "lucide-react";
+import { User, Crown, CreditCard, Ship, MessageSquare, Star, X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { api, type GuestProfile, type IncidentRecord, type ActionProposal, type PrioritizedIncident } from "@/lib/api";
 import { parseTimestamp } from "@/lib/utils";
@@ -247,14 +247,18 @@ const GuestRecoveryAgent = () => {
 
   const [selectedGuestId, setSelectedGuestId] = useState("");
   const [lastAdjustmentPrompt, setLastAdjustmentPrompt] = useState<string | null>(null);
-  
+  const [chattedIncidentIds, setChattedIncidentIds] = useState<string[]>([]);
+  const [selectedChatIncidentId, setSelectedChatIncidentId] = useState<string | null>(null);
+
   const guestsQuery = useQuery({ queryKey: ["guests"], queryFn: api.guests });
   const guests = guestsQuery.data ?? [];
   
+  const allIncidentsQuery = useQuery({ queryKey: ["incidents", "all"], queryFn: () => api.incidents() });
   const incidentsQuery = useQuery({ queryKey: ["incidents", selectedGuestId], queryFn: () => api.incidents({ guestId: selectedGuestId }), enabled: Boolean(selectedGuestId) });
   const prioritizedIncidentsQuery = useQuery({ queryKey: ["incidents", "prioritized", "guest-recovery"], queryFn: api.prioritizedIncidents });
   const venuesQuery = useQuery({ queryKey: ["venues"], queryFn: api.venues });
 
+  const allIncidents = allIncidentsQuery.data ?? [];
   const incidents = incidentsQuery.data ?? [];
   const topRankedIncidents = prioritizedIncidentsQuery.data ?? [];
   const venues = venuesQuery.data ?? [];
@@ -277,6 +281,12 @@ const GuestRecoveryAgent = () => {
     enabled: Boolean(selectedGuestId),
     refetchInterval: 10000,
   });
+  const chatFocusedProposalsQuery = useQuery({
+    queryKey: ["proposals", "chat-focused", selectedChatIncidentId],
+    queryFn: () => api.actionProposals(undefined, selectedChatIncidentId!),
+    enabled: Boolean(selectedChatIncidentId),
+  });
+  const chatFocusedProposals = chatFocusedProposalsQuery.data ?? [];
 
   const topGuestIds = Array.from(
     new Set(
@@ -323,6 +333,27 @@ const GuestRecoveryAgent = () => {
   const incidentSeverityById = new Map(
     incidents.map((inc) => [getIncidentIdentifier(inc), String(inc.severity ?? "unknown").toLowerCase()]),
   );
+  const incidentMetaById = new Map<string, { incident: IncidentRecord; guest: GuestProfile | undefined }>();
+  for (const { incident: ri, guest: rg } of topRankedIncidents) {
+    const id = getIncidentIdentifier(ri);
+    if (id) incidentMetaById.set(id, { incident: ri, guest: rg });
+  }
+  for (const inc of allIncidents) {
+    const id = getIncidentIdentifier(inc);
+    if (id && !incidentMetaById.has(id)) {
+      incidentMetaById.set(id, { incident: inc, guest: findGuestById(guests, inc.guestId) });
+    }
+  }
+  for (const inc of incidents) {
+    const id = getIncidentIdentifier(inc);
+    if (id && !incidentMetaById.has(id)) {
+      incidentMetaById.set(id, { incident: inc, guest: findGuestById(guests, inc.guestId) });
+    }
+  }
+  const recentChattedIncidents = chattedIncidentIds.slice(0, 2).map(id => ({
+    incidentId: id,
+    ...incidentMetaById.get(id),
+  }));
   const severityOrder = ["critical", "high", "medium", "low", "unknown"] as const;
   const proposalsBySeverity = severityOrder
     .map((severity) => ({
@@ -353,6 +384,15 @@ const GuestRecoveryAgent = () => {
   const handleChatCommand = (command: string) => {
     const normalized = command.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
     let nextSelectedGuestId = selectedGuestId;
+
+    const incidentIdMatches = command.match(/\bIN_[A-Z]+-\d+_\d+\b/gi) ?? [];
+    const mentionedIncidentIds = [...new Set(incidentIdMatches.map(id => id.toUpperCase()))];
+    if (mentionedIncidentIds.length > 0) {
+      setChattedIncidentIds(prev => {
+        const filtered = prev.filter(id => !mentionedIncidentIds.includes(id));
+        return [...mentionedIncidentIds, ...filtered].slice(0, 10);
+      });
+    }
 
     const guestFromCommand = findGuestFromCommandText(guests, normalized);
     const commandGuestId = getGuestIdentifier(guestFromCommand);
@@ -513,6 +553,48 @@ const GuestRecoveryAgent = () => {
 
         {/* Center Column - Ranked Incidents */}
         <div className="space-y-4">
+          {/* Chat Focused Incidents */}
+          {recentChattedIncidents.length > 0 && (
+            <div className="space-y-2">
+              <h2 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                <MessageSquare className="h-4 w-4 text-primary" />
+                Chat Focused Incidents ({recentChattedIncidents.length})
+              </h2>
+              {recentChattedIncidents.map(({ incidentId, incident: chatInc, guest: chatGuest }) => (
+                <div key={incidentId} className="rounded-lg border border-primary/30 bg-primary/5 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-mono text-muted-foreground">{incidentId}</p>
+                      <p className="text-sm font-semibold text-foreground mt-0.5">
+                        {chatInc ? (chatGuest?.fullName ?? chatGuest?.name ?? "Unknown Guest") : "Unknown Guest"}
+                      </p>
+                      {chatInc && (
+                        <div className="flex items-center gap-2 mt-1">
+                          <StatusBadge status={chatInc.severity} />
+                          <StatusBadge status={chatInc.status} />
+                        </div>
+                      )}
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={selectedChatIncidentId === incidentId ? "default" : "outline"}
+                      className="shrink-0"
+                      onClick={() => setSelectedChatIncidentId(prev => prev === incidentId ? null : incidentId)}
+                    >
+                      {selectedChatIncidentId === incidentId ? "Viewing" : "View Plan"}
+                    </Button>
+                  </div>
+                  {chatInc && (
+                    <p className="mt-2 text-xs text-muted-foreground line-clamp-2">
+                      {chatInc.type}: {chatInc.category} — {chatInc.description}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
           <h2 className="text-sm font-semibold text-foreground">Incidents Ranked by Lost Revenue Potential ({topRankedIncidents.length})</h2>
           {topRankedIncidents.map(({ incident: rankedIncident, guest: rankedGuest, potential }: PrioritizedIncident, index) => (
             <div key={getIncidentIdentifier(rankedIncident)} className="rounded-lg border border-border bg-card p-4">
@@ -540,6 +622,75 @@ const GuestRecoveryAgent = () => {
         {/* Right Column - Approval Queue (worker-generated action_proposals) */}
         <div className="space-y-4">
           <h2 className="text-sm font-semibold text-foreground">Recovery Plan Approval Queue</h2>
+
+          {/* Chat Focused Plan */}
+          {selectedChatIncidentId && (
+            <div className="space-y-3 pb-4 border-b border-border">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">
+                  <MessageSquare className="h-3.5 w-3.5" />
+                  Chat Focused Plan
+                </p>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 w-6 p-0"
+                  onClick={() => setSelectedChatIncidentId(null)}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+              <p className="text-[11px] font-mono text-muted-foreground">Incident: {selectedChatIncidentId}</p>
+              {chatFocusedProposalsQuery.isLoading && (
+                <div className="rounded-lg border border-border bg-card p-4">
+                  <p className="text-xs text-muted-foreground">Loading focused plan…</p>
+                </div>
+              )}
+              {!chatFocusedProposalsQuery.isLoading && chatFocusedProposals.length === 0 && (
+                <div className="rounded-lg border border-border bg-card p-4">
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    No agent proposal found for this incident yet.
+                  </p>
+                </div>
+              )}
+              {chatFocusedProposals.map((proposal: ActionProposal) => (
+                <div key={proposal.proposalId} className="rounded-lg border border-border bg-card p-4">
+                  <div className="flex items-start justify-between gap-2 mb-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Chat-Focused Plan</p>
+                      <p className="mt-1 text-sm font-medium text-foreground leading-snug">{proposal.summary ?? "Recovery plan ready for review"}</p>
+                    </div>
+                    <StatusBadge status={proposal.status as any} />
+                  </div>
+                  {proposal.reasoning && (
+                    <p className="text-xs text-muted-foreground leading-relaxed mb-3 border-l-2 border-primary/30 pl-2">{proposal.reasoning}</p>
+                  )}
+                  <div className="space-y-2">
+                    {proposal.actions.map((action, index) => (
+                      <div key={action.actionId} className="rounded-lg border border-border bg-muted/30 p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0 flex-1">
+                            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Action {index + 1}</p>
+                            <p className="mt-1 text-sm font-medium text-foreground">{action.label}</p>
+                            {action.description && (
+                              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{action.description}</p>
+                            )}
+                            {action.estimatedValue ? (
+                              <p className="mt-2 text-xs font-medium text-foreground">Estimated value: {formatCurrency(action.estimatedValue)}</p>
+                            ) : null}
+                          </div>
+                          <Button type="button" size="sm" className="shrink-0" onClick={() => undefined}>
+                            APPROVE
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* Demo Scenario */}
           <div className="rounded-lg border border-primary/30 bg-primary/5 p-4">

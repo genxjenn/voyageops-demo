@@ -7,6 +7,7 @@ import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import timedelta
 from pathlib import Path
 
 from couchbase.options import QueryOptions
@@ -79,16 +80,31 @@ def fetch_pending_run_ids(cluster, limit: int) -> list[str]:
     ORDER BY r.createdAt ASC
     LIMIT $limit
     """
-    result = cluster.query(
-        query,
-        QueryOptions(
-            named_parameters={
-                "status": "pending",
-                "limit": limit,
-            }
-        ),
-    )
-    return [str(row["runId"]) for row in result.rows() if row.get("runId")]
+    last_error = None
+    for attempt in range(1, 4):
+        try:
+            result = cluster.query(
+                query,
+                QueryOptions(
+                    named_parameters={
+                        "status": "pending",
+                        "limit": limit,
+                    },
+                    timeout=timedelta(seconds=20),
+                ),
+            )
+            return [str(row["runId"]) for row in result.rows() if row.get("runId")]
+        except Exception as error:
+            last_error = error
+            message = str(error)
+            is_timeout = "timeout" in message.lower()
+            if not is_timeout or attempt == 3:
+                raise
+            time.sleep(min(0.5 * attempt, 2.0))
+
+    if last_error is not None:
+        raise last_error
+    return []
 
 
 def main() -> None:

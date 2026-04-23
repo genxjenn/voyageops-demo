@@ -7,7 +7,7 @@ import { guests as mockGuests, incidents as mockIncidents, excursions as mockExc
 import { format } from "date-fns";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
-import { api, type GuestProfile, type IncidentRecord, type ShipInfo } from "@/lib/api";
+import { api, type AgentQueryMetadata, type GuestProfile, type IncidentRecord, type ShipInfo } from "@/lib/api";
 
 interface ChatMessage {
   id: string;
@@ -16,6 +16,7 @@ interface ChatMessage {
   timestamp: Date;
   isStreaming?: boolean;
   activityLevel?: "info" | "success" | "warning" | "error";
+  queryMetadata?: AgentQueryMetadata;
 }
 
 interface AgentChatProps {
@@ -316,7 +317,19 @@ export function AgentChat({ agentType = "general", className, onCommand }: Agent
     shipInfo: shipInfoQuery.data ?? mockShipInfo,
   };
 
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const storageKey = `agentChat:${agentType}`;
+  const [messages, setMessages] = useState<ChatMessage[]>(() => {
+    try {
+      const raw = sessionStorage.getItem(`agentChat:${agentType}`);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw) as Array<Record<string, unknown>>;
+      return parsed
+        .filter(m => m.role === "user" || m.role === "assistant")
+        .map(m => ({ ...m, timestamp: new Date(m.timestamp as string) } as ChatMessage));
+    } catch {
+      return [];
+    }
+  });
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [chatSessionId] = useState(() => `${agentType}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
@@ -324,6 +337,13 @@ export function AgentChat({ agentType = "general", className, onCommand }: Agent
   const inputRef = useRef<HTMLInputElement>(null);
   const handleSendRef = useRef<(text?: string) => void>(() => {});
   const seenLogIds = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const toSave = messages.filter(m => m.role === "user" || m.role === "assistant");
+    try {
+      sessionStorage.setItem(storageKey, JSON.stringify(toSave));
+    } catch { /* quota exceeded, ignore */ }
+  }, [messages, storageKey]);
 
   // Subscribe to live worker activity via SSE (guest-recovery agent only)
   useEffect(() => {
@@ -415,6 +435,7 @@ export function AgentChat({ agentType = "general", className, onCommand }: Agent
     if (messageText.trim().toLowerCase() === "clear") {
       setMessages([]);
       setInput("");
+      try { sessionStorage.removeItem(storageKey); } catch { /* ignore */ }
       return;
     }
 
@@ -438,15 +459,30 @@ export function AgentChat({ agentType = "general", className, onCommand }: Agent
     setInput("");
 
     let response = "";
+    let queryMetadata: AgentQueryMetadata | undefined;
     if (agentType === "guest-recovery") {
       try {
         const vectorResult = await api.agentQuery(messageText, agentType, chatSessionId);
         response = vectorResult.response;
-      } catch {
-        response = getAgentResponse(messageText, agentType, liveData);
+        queryMetadata = vectorResult.metadata;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        response = [
+          "### LLM Generation Failed",
+          "",
+          `The guest-recovery LLM call failed: ${message}`,
+          "",
+          "No fallback was used. Fix the backend/LLM call and retry.",
+        ].join("\n");
       }
     } else {
       response = getAgentResponse(messageText, agentType, liveData);
+    }
+
+    if (queryMetadata) {
+      setMessages(prev =>
+        prev.map(msg => msg.id === assistantId ? { ...msg, queryMetadata } : msg)
+      );
     }
 
     setTimeout(() => {
@@ -574,6 +610,35 @@ export function AgentChat({ agentType = "general", className, onCommand }: Agent
                     {msg.isStreaming && (
                       <span className="inline-block w-1.5 h-4 bg-primary/60 animate-pulse ml-0.5 align-middle" />
                     )}
+                    {msg.queryMetadata?.contextUsed && !msg.isStreaming && (
+                      <div className="mt-3 rounded-md border border-border bg-background/70 px-3 py-2 text-[11px] leading-relaxed not-prose">
+                        <p className="font-semibold uppercase tracking-wider text-muted-foreground">Context Used</p>
+                        <p className="mt-1 text-muted-foreground">
+                          Incident: <span className="text-foreground">{msg.queryMetadata.contextUsed.incidentId ?? "none"}</span>
+                          {" · "}
+                          Guest: <span className="text-foreground">{msg.queryMetadata.contextUsed.guestId ?? "none"}</span>
+                          {" · "}
+                          Proposal: <span className="text-foreground">{msg.queryMetadata.contextUsed.proposalId ?? "none"}</span>
+                        </p>
+                        <p className="mt-1 text-muted-foreground">
+                          Defined actions: <span className="text-foreground">{msg.queryMetadata.contextUsed.hasDefinedActions ? "yes" : "no"}</span>
+                          {" · "}
+                          Chat session doc: <span className="text-foreground">{msg.queryMetadata.contextUsed.chatSessionDocId ?? "none"}</span>
+                        </p>
+                        <p className="mt-1 text-muted-foreground">
+                          Policy rules: <span className="text-foreground">{msg.queryMetadata.contextUsed.policyRuleIds?.length ?? 0}</span>
+                          {" · "}
+                          Allowed actions: <span className="text-foreground">{msg.queryMetadata.contextUsed.allowedActionIds?.length ?? 0}</span>
+                          {" · "}
+                          Citations: <span className="text-foreground">{msg.queryMetadata.contextUsed.citations?.join(", ") ?? "none"}</span>
+                        </p>
+                        <p className="mt-1 text-muted-foreground">
+                          Model: <span className="text-foreground">{msg.queryMetadata.llmModel ?? "unknown"}</span>
+                          {" · "}
+                          Retrieval: <span className="text-foreground">{msg.queryMetadata.retrievalMode ?? "unknown"}</span>
+                        </p>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <p>{msg.content}</p>
@@ -622,7 +687,7 @@ export function AgentChat({ agentType = "general", className, onCommand }: Agent
               variant="ghost"
               size="icon"
               className="shrink-0 h-10 w-10"
-              onClick={() => setMessages([])}
+              onClick={() => { setMessages([]); try { sessionStorage.removeItem(storageKey); } catch { /* ignore */ } }}
               disabled={isStreaming}
             >
               <RotateCcw className="h-4 w-4" />

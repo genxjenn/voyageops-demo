@@ -94,16 +94,39 @@ export interface ActionProposal {
   updatedAt: string;
 }
 
-interface AgentQueryResponse {
+export interface AgentQueryMetadata {
+  sessionId?: string;
+  recentTurnsUsed?: number;
+  sessionAnchorIncidentId?: string;
+  sessionAnchorGuestId?: string;
+  llmModel?: string;
+  embeddingSource?: string;
+  retrievalMode?: string;
+  requestedIncidentId?: string;
+  incidentLookupStatus?: string;
+  requestedGuestId?: string;
+  guestLookupStatus?: string;
+  indexesAttempted?: string[];
+  indexesUsed?: string[];
+  contextUsed?: {
+    incidentId?: string;
+    guestId?: string;
+    proposalId?: string;
+    hasDefinedActions?: boolean;
+    hasDefinedPlaybooks?: boolean;
+    chatSessionDocId?: string;
+    recentTurnMessageIds?: string[];
+    policyRuleIds?: string[];
+    playbookIds?: string[];
+    allowedActionIds?: string[];
+    citations?: string[];
+  };
+}
+
+export interface AgentQueryResponse {
   response: string;
   incidents?: IncidentRecord[];
-  metadata?: {
-    sessionId?: string;
-    recentTurnsUsed?: number;
-    retrievalMode?: string;
-    indexesAttempted?: string[];
-    indexesUsed?: string[];
-  };
+  metadata?: AgentQueryMetadata;
 }
 
 function parseVoyageNumber(value: unknown): number | undefined {
