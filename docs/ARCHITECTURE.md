@@ -103,7 +103,7 @@ VoyageOps AI is an AI-powered operational intelligence platform for cruise line 
          │
          ▼
 ┌─────────────────────────────────────────────────────────┐
-│  Express API + Python Worker                             │
+│  Guest Recovery Express API + Python Worker                             │
 │  ┌────────────────┐  ┌────────────────┐                 │
 │  │ Couchbase       │  │ Guest Recovery │                │
 │  │ Capella DB      │  │ Embeddings     │                │
@@ -122,7 +122,7 @@ VoyageOps AI is an AI-powered operational intelligence platform for cruise line 
 
 **Phase 1 (MVP):** Mock data in `src/data/mockData.ts`
 
-**Phase 2 (Active):** Live Couchbase backend with Guest Recovery LLM chat and worker-generated proposals. Port Disruption and Onboard Ops are still demo-oriented workspaces without coded LLM agents.
+**Phase 2 (Active):** Live Couchbase backend with Guest Recovery LLM chat and worker-generated proposals. Port Disruption and Onboard Ops are still mock data only workspaces without coded LLM agents.
 
 The frontend remains unchanged — all fetch calls route through `/api/*` proxy to backend routes.
 
@@ -186,7 +186,7 @@ Each agent follows an identical structural pattern:
 
 ```
 ┌─────────────────────────────────────────────────┐
-│                Agent Page (3-Column Grid)         │
+│    Guest Recovery Agent Page (3-Column Grid)      │
 │                                                   │
 │  ┌─────────────┐ ┌──────────────┐ ┌────────────┐│
 │  │ Context      │ │ Recommen-    │ │ Timeline   ││
