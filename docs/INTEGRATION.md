@@ -1,9 +1,9 @@
 # VoyageOps AI — Couchbase Integration Guide
 
 > **Version:** 2.0 · **Last Updated:** April 2026  
-> **Purpose:** Backend wiring, agent scope, vector retrieval, and Capella Eventing configuration
+> **Purpose:** Backend wiring, agent scope, Guest Recovery vector retrieval/LLM chat, worker processing, and Capella Eventing configuration
 
-> **Status:** Phase 2 Active — Live backend with vector endpoint, agent scope, Eventing trigger, and seeded retrieval data
+> **Status:** Phase 2 Active — Guest Recovery is the only coded live LLM agent. Port Disruption and Onboard Ops remain deterministic/demo workspaces.
 
 ---
 
@@ -36,10 +36,17 @@ React SPA → Vite /api/* proxy → Express (src/api/server.ts) → Couchbase SD
 
 **What is live:**
 - Guest, incident, venue, excursion, recommendation, and KPI endpoints
-- Vector-powered agent query endpoint (`POST /api/agent-query`)
+- Conversational Guest Recovery agent query endpoint (`POST /api/agent-query`)
+- Structured LLM guidance for playbook, policy-rule, and action-catalog adjustments
+- Python Guest Recovery worker that processes `agent_runs` and writes `action_proposals`
+- Coverage-gap proposal flow (`coverage_gap_drafts_ready`) with draft playbook/action/policy artifacts
 - Agent scope: 7 collections, primary indexes, and 3 vector indexes
 - Capella Eventing function triggering on new open incidents
 - Seeded retrieval data (action_catalog, playbooks, policy_rules)
+
+**Not live as LLM agents yet:**
+- Port Disruption chat and recommendations are not backed by an OpenAI agent.
+- Onboard Ops chat and recommendations are not backed by an OpenAI agent.
 
 ---
 
@@ -53,7 +60,7 @@ React SPA → Vite /api/* proxy → Express (src/api/server.ts) → Couchbase SD
 | **Full-Text Search** | ✅ Managed FTS | ✅ FTS Service |
 | **Eventing** | ✅ Capella Eventing | ✅ Eventing Service |
 | **Analytics** | ✅ Columnar (RT-OLAP) | ✅ Analytics Service |
-| **AI Services** | ✅ Capella AI Services (Vector Search, RAG) | ❌ Use external LLM + FTS |
+| **AI Services** | ✅ Capella AI Services (Vector Search, RAG available) | ❌ Use external LLM + FTS |
 | **Mobile Sync** | ✅ App Services | ✅ Sync Gateway |
 | **SDK Code** | Portable — same API | Portable — same API |
 
@@ -67,7 +74,7 @@ React SPA → Vite /api/* proxy → Express (src/api/server.ts) → Couchbase SD
 
 ## 3. SDK Setup
 
-### Node.js SDK (for Edge Functions / API Layer)
+### Node.js SDK (for Express API Layer)
 
 ```bash
 npm install couchbase
@@ -168,16 +175,22 @@ CREATE PRIMARY INDEX ON voyageops.agent.action_executions;
 CREATE PRIMARY INDEX ON voyageops.agent.action_catalog;
 CREATE PRIMARY INDEX ON voyageops.agent.playbooks;
 CREATE PRIMARY INDEX ON voyageops.agent.policy_rules;
+CREATE INDEX ix_agent_runs_pending_createdAt
+ON voyageops.agent.agent_runs(createdAt)
+WHERE status = "pending";
+```
 
 ## Vector Retrieval \u2014 Incidents
 
-The `POST /api/agent-query` endpoint provides semantic retrieval over `voyageops.guests.incidents`.
+The `POST /api/agent-query` endpoint provides Guest Recovery semantic retrieval over `voyageops.guests.incidents`. It is not a shared live LLM endpoint for Port Disruption or Onboard Ops.
 
 ### Environment Variables
 
 ```
 OPENAI_API_KEY=sk-...              # Required for embedding generation
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small  # Optional, defaults to text-embedding-3-small
+OPENAI_MODEL=gpt-4o                # Optional chat completion model override
+GUEST_RECOVERY_CHAT_VERBOSITY=normal # concise|normal|detailed
 CB_VECTOR_INDEX_CATEGORY=          # Optional: override active index name for vector_category_incidents
 CB_VECTOR_INDEX_TYPE=              # Optional: override active index name for vector_type_incidents
 CB_VECTOR_INDEX_DESC=              # Optional: override active index name for vector_desc_incidents
@@ -197,8 +210,15 @@ All are SQL++ GSI-style vector indexes (not FTS). Access via `APPROX_VECTOR_DIST
 
 ```json
 {
-  "response": "Markdown formatted list of similar incidents",
+  "response": "Markdown conversational recovery assessment",
   "incidents": [...],
+  "guidance": {
+    "playbookAdjustments": [],
+    "policyRuleAdjustments": [],
+    "actionCatalogAdjustments": [],
+    "operationalGuidance": [],
+    "missingArtifacts": []
+  },
   "metadata": {
     "embeddingSource": "openai",
     "retrievalMode": "vector-index",
@@ -206,6 +226,8 @@ All are SQL++ GSI-style vector indexes (not FTS). Access via `APPROX_VECTOR_DIST
     "indexesUsed": ["idx1", "idx2", "idx3"]
   }
 }
+```
+
 ---
 
 ## 5. Couchbase SDK Accessors (db object)
@@ -303,6 +325,26 @@ function OnDelete(meta, options) {
 
 **Testing:** Insert an incident with `status: "open"` via Capella Query Workbench, then query `voyageops.agent.agent_runs` to confirm a single `pending` document was created.
 
+### Worker Loop
+
+Run the Guest Recovery worker locally with:
+
+```bash
+npm run demo:worker
+```
+
+The worker uses `.venv/bin/python backend/python/guest_recovery/run_worker_loop.py`, polls `voyageops.agent.agent_runs` where `status = "pending"`, and retries transient pending-run query timeouts. Relevant tuning variables:
+
+```bash
+GUEST_RECOVERY_POLL_SECONDS=3
+GUEST_RECOVERY_POLL_BATCH_SIZE=10
+GUEST_RECOVERY_WORKER_THREADS=3
+GUEST_RECOVERY_QUERY_TIMEOUT_SECONDS=8
+GUEST_RECOVERY_POLL_MAX_ATTEMPTS=4
+```
+
+Successful runs write `action_proposals` and move `agent_runs.status` to `awaiting_approval`. If no eligible catalog actions exist, the worker writes a `coverage_gap_drafts_ready` proposal with draft artifacts for review.
+
 
 ---
 
@@ -391,7 +433,7 @@ const { data: kpis } = useQuery({ queryKey: ['kpis'], queryFn: () =>
 // REPLACE: excursions, itinerary, weatherAdvisory
 // Capella/Server: SQL++ on excursions collection
 // Weather: External NOAA API cached in Couchbase with TTL
-// Capella: Capella AI Services for disruption probability scoring
+// LLM status: no live OpenAI/LLM agent is coded for this workspace yet
 // Server:  Eventing triggers on weather document updates
 ```
 
@@ -401,27 +443,31 @@ const { data: kpis } = useQuery({ queryKey: ['kpis'], queryFn: () =>
 // Capella/Server: SQL++ on venues collection
 // IoT Updates: Sub-Document API for partial venue updates (occupancy, waitTime)
 //   Docs: https://docs.couchbase.com/nodejs-sdk/current/howtos/subdocument-operations.html
-// Capella: Capella AI Services for demand prediction
+// LLM status: no live OpenAI/LLM agent is coded for this workspace yet
 // Server:  Eventing for auto-alerts when occupancy > threshold
 ```
 
 ### `src/components/AgentChat.tsx` — NLP Chat Interface (Live)
 
-The `guest-recovery` agent type now calls the live vector endpoint:
+The `guest-recovery` agent type now calls the live conversational endpoint:
 ```typescript
 // IMPLEMENTED: POST /api/agent-query
 // 1. User sends query
-// 2. Frontend calls api.agentQuery(query, "guest-recovery")
-// 3. Backend: resolveQueryEmbedding() → OpenAI or corpus fallback
-// 4. Backend: searchIncidentsByVectorIndexes() → APPROX_VECTOR_DISTANCE over 3 GSI vector indexes
-// 5. Response includes ranked incidents + metadata (retrievalMode, indexesUsed, embeddingSource)
-// 6. AgentChat renders Vector Mode badge showing live index status
+// 2. Frontend calls api.agentQuery(query, "guest-recovery", chatSessionId)
+// 3. Backend resolves explicit incident IDs before semantic retrieval
+// 4. Backend: resolveQueryEmbedding() → OpenAI or corpus fallback
+// 5. Backend: searchIncidentsByVectorIndexes() → APPROX_VECTOR_DISTANCE over incident GSI vector indexes
+// 6. Backend loads guest, proposal, recent chat turns, playbooks, policy rules, and action catalog
+// 7. Backend calls OpenAI chat/completions for conversational markdown + structured guidance
+// 8. AgentChat renders markdown and emits AgentQueryResponse to GuestRecoveryAgent for Chat Focused Plan
 ```
 
 Environment variables required:
 ```
 OPENAI_API_KEY=sk-...        # Required for embedding
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small  # Optional override
+OPENAI_MODEL=gpt-4o          # Optional chat completion override
+GUEST_RECOVERY_CHAT_VERBOSITY=normal # concise|normal|detailed
 CB_VECTOR_INDEX_CATEGORY=    # Optional: override default index name
 CB_VECTOR_INDEX_TYPE=        # Optional: override default index name
 CB_VECTOR_INDEX_DESC=        # Optional: override default index name
@@ -460,20 +506,22 @@ CB_VECTOR_INDEX_DESC=        # Optional: override default index name
    - Use the mock data objects from `mockData.ts` as seed documents
    - Insert via SDK `collection.upsert(docId, document)` or cbimport tool
 
-### Phase 2 — API Layer (Edge Functions)
+### Phase 2 — API Layer (Express)
 
-Create Edge Functions for each data domain:
+The current implementation uses `src/api/server.ts` and `src/api/routes.ts`; the frontend reaches it through the Vite `/api/*` proxy:
 
 | Endpoint | Method | Couchbase Operation | Source File |
 |---|---|---|---|
 | `/api/dashboard/kpis` | GET | SQL++ aggregation across all scopes | Dashboard.tsx |
 | `/api/guests/:id` | GET | KV get + SQL++ join incidents | GuestRecoveryAgent.tsx |
 | `/api/incidents` | GET | SQL++ with status/severity filters | Dashboard.tsx, GuestRecoveryAgent.tsx |
+| `/api/incidents/:id` | GET | SQL++ lookup + guest profile resolution | GuestRecoveryAgent.tsx |
 | `/api/excursions` | GET | SQL++ with status filter | PortDisruptionAgent.tsx |
 | `/api/venues` | GET | SQL++ ordered by occupancy | OnboardOpsAgent.tsx |
 | `/api/recommendations` | GET | SQL++ filtered by agentType | All agent pages |
+| `/api/action-proposals` | GET | SQL++ filtered by guestId or incidentId | GuestRecoveryAgent.tsx |
 | `/api/recommendations/:id` | PATCH | Sub-Document mutateIn (status update) | RecommendationCard.tsx |
-| `/api/chat` | POST | Capella AI Services or FTS + LLM | AgentChat.tsx |
+| `/api/agent-query` | POST | Guest Recovery only: OpenAI embedding + SQL++ vector retrieval + OpenAI chat | AgentChat.tsx |
 | `/api/timeline/:agentType` | GET | SQL++ ordered by timestamp DESC | All agent pages |
 
 ### Phase 3 — Frontend Migration
@@ -497,7 +545,7 @@ const { data: venues, isLoading } = useQuery({
 ### Phase 4 — Real-Time & AI
 
 - Enable Eventing Service for proactive alerts (Server) or Capella Eventing
-- Integrate Capella AI Services for vector search and RAG-based chat
+- Future work: extend the current Guest Recovery RAG/chat pattern to Port Disruption and Onboard Ops
 - Add WebSocket/SSE for live venue occupancy updates
 
 ---
@@ -557,11 +605,9 @@ ORDER BY occupancyPct DESC;
 
 ## 11. AI & NLP Integration
 
-> **Status:** Data infrastructure complete. RAG pipeline not yet implemented.
+> **Status:** Guest Recovery RAG/chat path is live. Port Disruption and Onboard Ops do not yet have coded live LLM agents. Approval execution and outcomes write-back are still future work.
 
 ### What is in place
-
-The following foundation is ready for a RAG pipeline to be built on top of:
 
 - **Vector indexes** on `voyageops.guests.incidents` (3 GSI vector indexes, 1536-dim, L2)
 - **Agent scope vector indexes** on `action_catalog`, `playbooks`, `outcomes` (seeded, indexed)
@@ -569,42 +615,66 @@ The following foundation is ready for a RAG pipeline to be built on top of:
 - **Semantic retrieval** via `APPROX_VECTOR_DISTANCE` SQL++ (`searchIncidentsByVectorIndexes()`)
 - **Seeded retrieval context** — action catalog, playbooks, and policy rules with embeddings loaded
 - **Capella Eventing trigger** — new open incidents create pending `agent_runs` automatically
+- **Conversational chat** via OpenAI `chat/completions` in `POST /api/agent-query`
+- **Structured guidance** returned to the frontend as playbook, policy-rule, action-catalog, operational, and missing-artifact recommendations
+- **Python worker** processing `agent_runs` and writing `action_proposals`
+- **Coverage gap handling** via `coverage_gap_drafts_ready` proposals when no eligible actions exist
+
+### LLM Agent Availability
+
+| Workspace | Live LLM Agent? | Notes |
+|---|---|---|
+| Guest Recovery | Yes | Uses `POST /api/agent-query`, OpenAI chat/embeddings, structured guidance, and the Python worker |
+| Port Disruption | No | Current behavior is deterministic/demo-oriented; future candidate for LLM orchestration |
+| Onboard Ops | No | Current behavior is deterministic/demo-oriented; future candidate for LLM orchestration |
 
 ### What is not yet implemented
 
-- LLM `chat/completions` call (no GPT-4/Claude prompt assembly or response generation)
-- Context window preparation (incident + actions + playbooks + guest profile assembled into prompt)
-- `action_proposals` generation from LLM output
-- Approval queue wired to real `action_proposals` documents (currently uses mock `recommendations`)
 - `action_executions` write-back from approved proposals
 - `outcomes` document generation post-execution
+- Full governance workflow to approve and insert generated draft playbook/action/policy artifacts
+- Multi-provider LLM routing beyond the current OpenAI path
 
-### Planned RAG Flow (when implemented)
+### Live Guest Recovery Chat Flow
 
 ```
 User Query
     ↓
-  Embed query (OpenAI text-embedding-3-small)           ← EXISTS
+  Extract explicit incident IDs                        ← IMPLEMENTED
     ↓
-  APPROX_VECTOR_DISTANCE over incidents                 ← EXISTS
+  Embed query (OpenAI text-embedding-3-small)           ← IMPLEMENTED
     ↓
-  APPROX_VECTOR_DISTANCE over action_catalog            ← READY (index + data seeded)
+  APPROX_VECTOR_DISTANCE over incidents                 ← IMPLEMENTED
     ↓
-  APPROX_VECTOR_DISTANCE over playbooks                 ← READY (index + data seeded)
+  Load guest, proposal, chat memory, playbooks,         ← IMPLEMENTED
+  policy rules, and action catalog
     ↓
-  Fetch matching policy_rules (SQL++ filter)            ← READY (data seeded)
+  POST to OpenAI chat/completions                       ← IMPLEMENTED
     ↓
-  Assemble prompt: guest context + incidents +          ← NOT YET IMPLEMENTED
-  matched actions + playbook + policy constraints
-    ↓
-  POST to OpenAI chat/completions (GPT-4o)              ← NOT YET IMPLEMENTED
-    ↓
-  Parse structured proposal from LLM response           ← NOT YET IMPLEMENTED
-    ↓
-  Write action_proposals → approval queue               ← NOT YET IMPLEMENTED
+  Return markdown response + structured guidance        ← IMPLEMENTED
 ```
 
-### References (for when RAG is implemented)
+### Live Guest Recovery Worker Flow
+
+```
+Open incident
+    ↓
+  Capella Eventing creates pending agent_run            ← IMPLEMENTED
+    ↓
+  Python worker polls pending runs with timeout/retry   ← IMPLEMENTED
+    ↓
+  Resolve context + eligible actions + policies         ← IMPLEMENTED
+    ↓
+  OpenAI generates structured recommendation JSON       ← IMPLEMENTED
+    ↓
+  Retry unknown actionId, then fallback to top action   ← IMPLEMENTED
+    ↓
+  Write action_proposals → approval queue               ← IMPLEMENTED
+    ↓
+  If no actions exist, write coverage gap drafts        ← IMPLEMENTED
+```
+
+### References
 
 - OpenAI chat completions: https://platform.openai.com/docs/api-reference/chat
 - Capella Vector Search: https://docs.couchbase.com/cloud/vector-search/vector-search.html
@@ -660,8 +730,8 @@ await collection.mutateIn('venue::le-bordeaux', [
 ## 13. Security & Connection Management
 
 ### Credential Storage
-- Store all Couchbase credentials as Edge Function secrets (never in frontend code)
-- Required secrets: `COUCHBASE_ENDPOINT`, `COUCHBASE_USER`, `COUCHBASE_PASSWORD`
+- Store all Couchbase and OpenAI credentials server-side in the repo-root `.env` for local demo, or in deployment secrets for hosted environments
+- Required secrets: `COUCHBASE_ENDPOINT`, `COUCHBASE_USER`, `COUCHBASE_PASSWORD`, `OPENAI_API_KEY`
 - Optional: `COUCHBASE_BUCKET` (defaults to `voyageops`)
 
 ### RBAC (Role-Based Access Control)
@@ -672,7 +742,7 @@ await collection.mutateIn('venue::le-bordeaux', [
 ### Network Security
 - **Capella:** IP allowlisting + TLS by default
 - **Server:** Configure TLS certificates + firewall rules
-- Edge Functions act as the sole gateway — frontend never connects to Couchbase directly
+- The Express API acts as the sole gateway — frontend never connects to Couchbase directly
 
 ---
 
@@ -680,7 +750,7 @@ await collection.mutateIn('venue::le-bordeaux', [
 
 | Source File | What to Replace | Couchbase Service |
 |---|---|---|
-| `src/data/mockData.ts` | All static exports | SQL++ queries via Edge Functions |
+| `src/data/mockData.ts` | Static/demo exports | SQL++ queries via Express routes |
 | `src/pages/Dashboard.tsx` | `dashboardKPIs`, `incidents`, etc. | Analytics Service (KPIs), SQL++ (lists) |
 | `src/pages/GuestRecoveryAgent.tsx` | `guests[0]`, `incidents`, timeline | SQL++ JOIN, KV get |
 | `src/pages/PortDisruptionAgent.tsx` | `excursions`, `itinerary`, weather | SQL++, external API + cache |

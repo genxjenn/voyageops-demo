@@ -1,8 +1,8 @@
 # VoyageOps AI — Architecture & Design Specification
 
-> **Version:** 1.1 · **Last Updated:** March 2026  
+> **Version:** 1.2 · **Last Updated:** April 2026  
 > **Platform:** Acme Cruise Line · MS Acme Voyager  
-> **Status:** MVP (Phase 1 mock data for Port & Excusion AND Onboard Ops, Phase 2 — Couchbase cluster Data for Guests & Incident Initiation ) with production architecture defined.
+> **Status:** Phase 2 active — live Couchbase backend, conversational Guest Recovery LLM chat, and Python worker-generated action proposals.
 
 ---
 
@@ -69,6 +69,10 @@ VoyageOps AI is an AI-powered operational intelligence platform for cruise line 
 | **Date Utils** | date-fns 3.6 | Timestamp formatting in chat messages |
 | **State** | React useState/useCallback | Local component state (no global store) |
 | **Notifications** | Sonner 1.7 | Toast notifications for actions |
+| **API Backend** | Express + Node.js SDK | `/api/*` routes, Couchbase access, Guest Recovery OpenAI chat/embedding calls |
+| **Worker Runtime** | Python + Couchbase SDK | Guest Recovery agent run polling and proposal generation |
+| **Database** | Couchbase Capella | Operational JSON documents, SQL++, Eventing, vector indexes |
+| **LLM** | OpenAI chat + embeddings | Live only for Guest Recovery; Port Disruption and Onboard Ops remain deterministic demo experiences |
 
 ### Architecture Diagram
 
@@ -85,7 +89,7 @@ VoyageOps AI is an AI-powered operational intelligence platform for cruise line 
 │  │ • Ops    │  │  └──────────────────────────────┘    │ │
 │  │ • Arch   │  │  ┌──────────────────────────────┐    │ │
 │  │          │  │  │  AgentChat (NLP Interface)     │    │ │
-│  │ Agent    │  │  │  • Pattern-matched responses   │    │ │
+│  │ Agent    │  │  │  • Guest Recovery LLM chat     │    │ │
 │  │ Status   │  │  │  • Streaming simulation        │    │ │
 │  │ Indicators│ │  │  • Markdown rendering           │    │ │
 │  └──────────┘  │  └──────────────────────────────┘    │ │
@@ -97,15 +101,15 @@ VoyageOps AI is an AI-powered operational intelligence platform for cruise line 
 │  └──────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────┘
          │
-         ▼ (Phase 2 — Production)
+         ▼
 ┌─────────────────────────────────────────────────────────┐
-│  API Gateway / Edge Functions                            │
+│  Express API + Python Worker                             │
 │  ┌────────────────┐  ┌────────────────┐                 │
-│  │ Couchbase       │  │ LLM / RAG      │                │
-│  │ Capella DB      │  │ Pipeline       │                │
-│  │ (JSON docs,     │  │ (LangChain,    │                │
-│  │  Vector Search, │  │  GPT-4/Claude) │                │
-│  │  Eventing)      │  │                │                │
+│  │ Couchbase       │  │ Guest Recovery │                │
+│  │ Capella DB      │  │ Embeddings     │                │
+│  │ (JSON docs,     │  │ (chat, RAG,    │                │
+│  │  SQL++, Vector, │  │  structured    │                │
+│  │  Eventing)      │  │  guidance)     │                │
 │  └────────────────┘  └────────────────┘                 │
 └─────────────────────────────────────────────────────────┘
 ```
@@ -116,9 +120,9 @@ VoyageOps AI is an AI-powered operational intelligence platform for cruise line 
 
 ### Data Model Evolution
 
-**Phase 1 (MVP — Current):** Mock data in `src/data/mockData.ts`
+**Phase 1 (MVP):** Mock data in `src/data/mockData.ts`
 
-**Phase 2 (Active):** Live Couchbase backend with agent lifecycle management
+**Phase 2 (Active):** Live Couchbase backend with Guest Recovery LLM chat and worker-generated proposals. Port Disruption and Onboard Ops are still demo-oriented workspaces without coded LLM agents.
 
 The frontend remains unchanged — all fetch calls route through `/api/*` proxy to backend routes.
 
@@ -202,7 +206,7 @@ Each agent follows an identical structural pattern:
 └─────────────────────────────────────────────────┘
 ```
 
-### Guest Recovery Agent (`/guest-recovery`) — Live Vector Retrieval
+### Guest Recovery Agent (`/guest-recovery`) — Live Conversational Recovery Planning
 
 **Context Panel:**
 - Guest profile card (name, loyalty tier, cabin, booking, spend, sailing history, notes)
@@ -210,9 +214,12 @@ Each agent follows an identical structural pattern:
 - All incidents list with severity/status badges
 
 **AI Chat Interface (AgentChat):**
-- User query → `POST /api/agent-query` with OpenAI embedding
-- Backend performs SQL++ `APPROX_VECTOR_DISTANCE` search across 3 vector indexes
-- Returns ranked incidents + metadata (retrieval mode, indexes used, embedding source)
+- User query → `POST /api/agent-query` with OpenAI embedding and chat memory
+- Backend resolves explicit incident IDs first, then falls back to vector retrieval across incident indexes
+- Backend assembles guest, incident, proposal, playbook, policy, and action-catalog context
+- OpenAI chat completion returns conversational markdown plus structured `guidance`
+- `guidance` can include playbook, policy rule, action catalog, operational guidance, and missing-artifact drafts
+- Chat-focused incident state displays the latest LLM response independently from the worker proposal
 - Chat badge shows: 
   - **Vector Mode** (blue) = indexes active
   - **Indexes active** (gray) = count of live GSI vector indexes
@@ -221,14 +228,18 @@ Each agent follows an identical structural pattern:
 **Agent data model (production):**
 - Query triggers Capella Eventing OnUpdate → writes pending run to `agent_runs`
 - Backend worker polls pending runs
-- Retrieves semantically-matched actions + playbooks from vector indexes
-- Assembles context, calls LLM (GPT-4/Claude via OpenAI API)
+- Resolves incident and guest context, finds a playbook, loads eligible actions and policy rules
+- Calls OpenAI chat completions for structured recovery recommendation JSON
+- Retries once if the model selects an unknown `actionId`, then falls back to the top eligible action only after retry
 - Writes proposal to `action_proposals` → approval queue
+- If no eligible actions exist, writes `coverage_gap_drafts_ready` with draft playbook/action/policy artifacts
 - On approval, writes execution + outcomes for analytics
 
 **Unique data points:** Lifetime value, churn risk, first-complaint flag, policy constraints
 
 ### Port & Excursion Disruption Agent (`/port-disruption`)
+
+> **LLM status:** No live LLM-backed Port Disruption agent is currently coded. This workspace uses deterministic/demo behavior and liveable data surfaces, not OpenAI-driven planning.
 
 **Context Panel:**
 - Active weather advisory (wind speed, sea state, cancellation probability)
@@ -238,6 +249,8 @@ Each agent follows an identical structural pattern:
 **Unique data points:** NOAA forecast integration, tendering risk assessment, vendor cancellation handling
 
 ### Onboard Operations Agent (`/onboard-ops`)
+
+> **LLM status:** No live LLM-backed Onboard Ops agent is currently coded. This workspace uses deterministic/demo behavior and operational UI patterns, not OpenAI-driven planning.
 
 **Context Panel:**
 - Venue utilization cards with occupancy bars (color-coded: green < 70%, yellow 70-90%, red > 90%)
@@ -251,7 +264,7 @@ Each agent follows an identical structural pattern:
 
 ## 5. Data Model & Schema
 
-All data is defined in `src/data/mockData.ts` as TypeScript interfaces with mock instances. The schema is designed to map directly to Couchbase JSON documents.
+The application is now hybrid: Guest Recovery reads live Couchbase data through `/api/*`, while portions of Port Disruption and Onboard Ops still use demo/mock data. The TypeScript schemas continue to map directly to Couchbase JSON documents.
 
 ### Entity Relationship Diagram
 
@@ -358,13 +371,15 @@ Incident created (status=open)
      ↓
   New pending agent_run created                         ← IMPLEMENTED
      ↓
-  Backend worker polls agent_runs WHERE status="pending"← NOT YET IMPLEMENTED
+  Backend worker polls agent_runs WHERE status="pending"← IMPLEMENTED
      ↓
-  Vector retrieval: actions + playbooks + policies      ← DATA READY (indexes + seed data)
+  Resolve incident, guest, playbook, actions, policies  ← IMPLEMENTED
      ↓
-  LLM prompt assembly + chat/completions call           ← NOT YET IMPLEMENTED
+  LLM prompt assembly + chat/completions call           ← IMPLEMENTED
      ↓
-  Agent generates action_proposal (pending approval)    ← NOT YET IMPLEMENTED
+  Agent generates action_proposal (awaiting approval)   ← IMPLEMENTED
+     ↓
+  Coverage gap drafts if actions are missing            ← IMPLEMENTED
      ↓
   Human approves → action_execution created             ← NOT YET IMPLEMENTED
      ↓
@@ -381,6 +396,15 @@ Incident created (status=open)
 | `action_catalog` | Lookup library of recovery actions | **YES** (embedding) |
 | `playbooks` | Workflow templates combining actions | **YES** (embedding) |
 | `policy_rules` | Constraints & guardrails | NO |
+
+### Proposal Statuses
+
+| Status | Meaning |
+|---|---|
+| `pending` | `agent_runs` document is waiting for worker pickup |
+| `awaiting_approval` | Worker generated a concrete proposal for supervisor review |
+| `coverage_gap_drafts_ready` | Worker could not find eligible catalog actions and generated draft playbook/action/policy artifacts |
+| `approved` / `rejected` / `executed` | Human workflow states for future approval and execution handling |
 
 ---
 
@@ -418,20 +442,22 @@ ON voyageops.agent.outcomes(embedding VECTOR);
 
 All configured with: 1536 dimensions, L2 similarity, IVF,SQ8 description.
 
-### Retrieval Flow (POST /api/agent-query)
+### Guest Recovery Retrieval Flow (`POST /api/agent-query`)
 
-1. **Embedding:** OpenAI or corpus fallback (token-overlap cosine similarity)
-2. **SQL++ Search:** `APPROX_VECTOR_DISTANCE` across 3 collections in parallel
-3. **Deduplication:** Aggregates results by docId, de-duplicates across indexes
-4. **Fallback:** In-memory cosine similarity if indexes unavailable
-5. **Metadata:** Returns retrieval mode, indexes used, embedding source
+1. **Explicit ID parsing:** Incident IDs in the user query take precedence over semantic retrieval
+2. **Embedding:** OpenAI or corpus fallback (token-overlap cosine similarity)
+3. **SQL++ Search:** `APPROX_VECTOR_DISTANCE` across incident vector indexes in parallel
+4. **Context loading:** Guest profile, existing proposal, recent chat turns, playbooks, policy rules, and action catalog
+5. **LLM response:** OpenAI chat completion returns markdown plus structured guidance
+6. **Metadata:** Returns retrieval mode, indexes used, embedding source, context IDs, and citation IDs
 
 ### Chat UI Integration
 
-AgentChat displays retrieval status:
+For `guest-recovery`, AgentChat displays retrieval and response status:
 - **Vector Mode** badge (blue) = indexes active
 - **3 indexes active** = count of live GSI vectors
 - **Fallback active** warning = using in-memory similarity
+- Guest Recovery responses can drive a Chat Focused Plan panel with the latest LLM response for the selected incident
 
 ---
 
@@ -672,15 +698,11 @@ This decoupled pattern avoids prop drilling and works across the component tree.
 └─────────────────────────────────────────┘
 ```
 
-### Response Matching System
+### Response Generation System
 
-The `getMockResponse()` function uses regex pattern matching:
+For `guest-recovery`, `AgentChat` calls `api.agentQuery()` and renders the live LLM response. It also emits the full `AgentQueryResponse` to `GuestRecoveryAgent`, which stores chat-focused plans by incident ID.
 
-```typescript
-const MOCK_RESPONSES: Record<agentType, { patterns: RegExp[]; response: string }[]>
-```
-
-**Pattern priority:** Agent-specific patterns are checked first, then general patterns. Fallback response suggests valid query topics.
+For non-Guest-Recovery agent types, the component supports deterministic demo responses through `getAgentResponse()`; no live LLM agent is wired for those workspaces yet.
 
 ### Streaming Simulation
 
@@ -694,6 +716,10 @@ Responses are revealed character-by-character at 3 chars per 12ms interval (~250
 | Guest Recovery | Margaret Chen's incident, Rossi recovery plan, All active incidents |
 | Port Disruption | Santorini weather status, Crete excursion, All excursion status |
 | Onboard Ops | Dining capacity, Pool/spa status, All venue overview |
+
+### Guest Recovery Verbosity
+
+`GUEST_RECOVERY_CHAT_VERBOSITY=concise|normal|detailed` controls the chat prompt and how much structured guidance is appended. Concise mode asks the LLM for 3-5 bullets and only includes missing artifacts when relevant.
 
 ### Features
 
@@ -734,16 +760,16 @@ Responses are revealed character-by-character at 3 chars per 12ms interval (~250
 
 ## 14. Production Roadmap
 
-### Phase 1 (Current) — MVP Demo
+### Phase 1 — MVP Demo
 
 - ✅ Full UI with mock data
 - ✅ 3 agent workspaces with context panels, recommendations, timelines
-- ✅ NLP chat with pattern-matched responses and streaming simulation
+- ✅ Guest Recovery live LLM chat, with deterministic demo responses still available for other agents
 - ✅ Guided demo with live query injection
 - ✅ Responsive layout with collapsible sidebar
 - ✅ Rich data visualization (3 chart types)
 
-### Phase 2 — Couchbase Capella Integration
+### Phase 2 (Active) — Couchbase Capella + Guest Recovery Agent
 
 | Component | Implementation |
 |---|---|
@@ -753,15 +779,18 @@ Responses are revealed character-by-character at 3 chars per 12ms interval (~250
 | **Real-time** | Sub-document operations for venue/staff updates |
 | **Vector Search** | Semantic similarity for guest preferences, incident patterns |
 | **Eventing** | Document change triggers for agent activation |
+| **Guest Recovery Chat** | Conversational LLM response with structured guidance and missing-artifact drafts |
+| **Worker Loop** | Python worker processes `agent_runs` and writes `action_proposals` |
+| **Port / Onboard LLMs** | Not implemented; current pages remain demo/deterministic experiences |
 | **Replication** | XDCR for multi-region fleet sync |
 
-### Phase 3 — LLM Agent Orchestration
+### Phase 3 — Approval, Execution, and Broader Agent Orchestration
 
 | Component | Implementation |
 |---|---|
-| **LLM Provider** | GPT-4 / Claude for natural language reasoning |
+| **LLM Provider** | OpenAI is live for Guest Recovery; additional providers can be added later |
 | **Orchestration** | LangChain/LangGraph agent pipelines |
-| **RAG** | Couchbase Vector Search for context retrieval |
+| **RAG** | Couchbase Vector Search and SQL++ context retrieval |
 | **Tools** | Agent tools for database queries, API calls, action execution |
 | **Approval** | Human-in-the-loop workflows with audit logging |
 
@@ -779,11 +808,13 @@ Responses are revealed character-by-character at 3 chars per 12ms interval (~250
 
 ## 15. Deployment & Infrastructure
 
-### Current (MVP)
+### Current
 
 - **Hosting:** Lovable preview / published URL
 - **Build:** `vite build` produces static SPA
-- **Dev server:** Port 8080, HMR overlay disabled
+- **Dev server:** Vite, proxied `/api/*` calls to Express
+- **API server:** `src/api/server.ts`, loading repo-root `.env`
+- **Worker:** `.venv/bin/python backend/python/guest_recovery/run_worker_loop.py`
 
 ### Production Target
 
@@ -805,21 +836,26 @@ Responses are revealed character-by-character at 3 chars per 12ms interval (~250
 | Variable | Purpose |
 |---|---|
 | `COUCHBASE_ENDPOINT` | Capella cluster connection string |
-| `COUCHBASE_USERNAME` | Database authentication |
+| `COUCHBASE_USER` | Database authentication |
 | `COUCHBASE_PASSWORD` | Database authentication |
-| `COUCHBASE_AI_ENDPOINT` | Capella AI Services URL |
 | `COUCHBASE_BUCKET` | Primary bucket name |
+| `OPENAI_API_KEY` | OpenAI chat and embedding calls |
+| `OPENAI_MODEL` | Chat completion model override |
+| `OPENAI_EMBEDDING_MODEL` | Embedding model override |
+| `GUEST_RECOVERY_CHAT_VERBOSITY` | `concise`, `normal`, or `detailed` chat response style |
+| `GUEST_RECOVERY_QUERY_TIMEOUT_SECONDS` | Worker pending-run query timeout |
+| `GUEST_RECOVERY_POLL_MAX_ATTEMPTS` | Worker pending-run retry attempts |
 
 ---
 
 ## 16. Security Considerations
 
-### Current (MVP)
+### Current
 
 - No authentication (demo mode)
 - No API keys in client code
 - All data is static mock — no PII exposure
-- No backend connectivity
+- Backend and worker connectivity use server-side `.env`; frontend never receives Couchbase or OpenAI credentials
 
 ### Production Requirements
 
