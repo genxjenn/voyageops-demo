@@ -7,7 +7,7 @@ import { guests as mockGuests, incidents as mockIncidents, excursions as mockExc
 import { format } from "date-fns";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
-import { api, type AgentQueryMetadata, type GuestProfile, type IncidentRecord, type ShipInfo } from "@/lib/api";
+import { api, type AgentQueryMetadata, type AgentQueryResponse, type GuestProfile, type IncidentRecord, type ShipInfo } from "@/lib/api";
 
 interface ChatMessage {
   id: string;
@@ -23,6 +23,7 @@ interface AgentChatProps {
   agentType?: "guest-recovery" | "port-disruption" | "onboard-ops" | "general";
   className?: string;
   onCommand?: (command: string) => void;
+  onAgentResponse?: (payload: { query: string; result: AgentQueryResponse }) => void;
 }
 
 // ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -296,7 +297,7 @@ function CopyButton({ content }: { content: string }) {
   );
 }
 
-export function AgentChat({ agentType = "general", className, onCommand }: AgentChatProps) {
+export function AgentChat({ agentType = "general", className, onCommand, onAgentResponse }: AgentChatProps) {
   const guestsQuery = useQuery({ queryKey: ["guests"], queryFn: api.guests });
   const incidentsQuery = useQuery({ queryKey: ["incidents"], queryFn: () => api.incidents() });
   const excursionsQuery = useQuery({ queryKey: ["excursions"], queryFn: api.excursions });
@@ -457,6 +458,7 @@ export function AgentChat({ agentType = "general", className, onCommand }: Agent
 
     setMessages(prev => [...prev, userMsg, assistantMsg]);
     setInput("");
+    onCommand?.(messageText);
 
     let response = "";
     let queryMetadata: AgentQueryMetadata | undefined;
@@ -465,6 +467,7 @@ export function AgentChat({ agentType = "general", className, onCommand }: Agent
         const vectorResult = await api.agentQuery(messageText, agentType, chatSessionId);
         response = vectorResult.response;
         queryMetadata = vectorResult.metadata;
+        onAgentResponse?.({ query: messageText, result: vectorResult });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         response = [
@@ -486,11 +489,9 @@ export function AgentChat({ agentType = "general", className, onCommand }: Agent
     }
 
     setTimeout(() => {
-      simulateStreaming(response, assistantId, () => {
-        onCommand?.(messageText);
-      });
+      simulateStreaming(response, assistantId);
     }, 400);
-  }, [input, isStreaming, agentType, chatSessionId, simulateStreaming, liveData, onCommand]);
+  }, [input, isStreaming, agentType, chatSessionId, simulateStreaming, liveData, onCommand, onAgentResponse]);
 
   // Keep ref in sync and listen for guided demo events
   handleSendRef.current = handleSend;

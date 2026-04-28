@@ -1,5 +1,4 @@
 // src/api/routes.ts
-import 'dotenv/config';
 import express from 'express';
 import type { Response } from 'express';
 import { db } from '../lib/couchbase.ts';
@@ -40,6 +39,31 @@ interface ChatSessionState {
   lastIncidentId?: string;
   lastGuestId?: string;
 }
+
+interface GuidanceAdjustment {
+  title: string;
+  rationale: string;
+  priority: 'low' | 'medium' | 'high';
+  suggestedChange?: string;
+}
+
+interface MissingArtifactDraft {
+  artifactType: 'playbook' | 'action_catalog' | 'policy_rule';
+  title: string;
+  rationale: string;
+  priority: 'low' | 'medium' | 'high';
+  draft: Record<string, unknown>;
+}
+
+interface GuidanceBundle {
+  playbookAdjustments: GuidanceAdjustment[];
+  policyRuleAdjustments: GuidanceAdjustment[];
+  actionCatalogAdjustments: GuidanceAdjustment[];
+  operationalGuidance: string[];
+  missingArtifacts: MissingArtifactDraft[];
+}
+
+type ChatVerbosity = 'concise' | 'normal' | 'detailed';
 
 function broadcastLog(entry: WorkerLogEntry) {
   const payload = `data: ${JSON.stringify(entry)}\n\n`;
@@ -719,17 +743,25 @@ function buildChatMessageDocId(sessionId: string) {
 
 async function loadRecentChatTurns(sessionId: string, agentType: string, limit = 8): Promise<ChatTurn[]> {
   try {
+    const safeLimit = Math.max(1, Math.min(50, Number.isFinite(limit) ? Math.floor(limit) : 8));
     const result = await db.cluster.query(
       `
-      SELECT m.sessionId, m.role, m.message, m.createdAt, m.agentType, m.messageId, m.incidentId, m.guestId
-      FROM voyageops.agent.chat_messages m
+      SELECT m.sessionId,
+             m.\`role\` AS \`role\`,
+             m.\`message\` AS \`message\`,
+             m.createdAt,
+             m.agentType,
+             m.messageId,
+             m.incidentId,
+             m.guestId
+      FROM voyageops.agent.chat_messages AS m
       WHERE m.sessionId = $sessionId
         AND m.agentType = $agentType
       ORDER BY m.createdAt DESC, m.messageId DESC
-      LIMIT $limit
+      LIMIT $safeLimit
       `,
       {
-        parameters: { sessionId, agentType, limit },
+        parameters: { sessionId, agentType, safeLimit },
         timeout: 10000,
       },
     );
@@ -904,6 +936,398 @@ function formatCurrency(value: unknown) {
     currency: 'USD',
     maximumFractionDigits: 0,
   });
+}
+
+function sanitizeGuidanceAdjustments(input: unknown): GuidanceAdjustment[] {
+  if (!Array.isArray(input)) return [];
+
+  return input
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null;
+      const obj = item as Record<string, unknown>;
+      const title = String(obj.title ?? '').trim();
+      const rationale = String(obj.rationale ?? '').trim();
+      const suggestedChange = String(obj.suggestedChange ?? '').trim();
+      const priorityRaw = String(obj.priority ?? 'medium').toLowerCase();
+      const priority: GuidanceAdjustment['priority'] =
+        priorityRaw === 'low' || priorityRaw === 'high' || priorityRaw === 'medium'
+          ? priorityRaw
+          : 'medium';
+
+      if (!title || !rationale) return null;
+      return {
+        title,
+        rationale,
+        priority,
+        suggestedChange: suggestedChange || undefined,
+      };
+    })
+    .filter(Boolean) as GuidanceAdjustment[];
+}
+
+function sanitizeGuidanceBundle(input: unknown): GuidanceBundle {
+  const source = input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+  const operationalGuidanceRaw = Array.isArray(source.operationalGuidance) ? source.operationalGuidance : [];
+  const operationalGuidance = operationalGuidanceRaw
+    .map((item) => String(item ?? '').trim())
+    .filter(Boolean)
+    .slice(0, 6);
+  const missingArtifactsRaw = Array.isArray(source.missingArtifacts) ? source.missingArtifacts : [];
+  const missingArtifacts = missingArtifactsRaw
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null;
+      const obj = item as Record<string, unknown>;
+      const artifactTypeRaw = String(obj.artifactType ?? '').trim().toLowerCase();
+      const artifactType: MissingArtifactDraft['artifactType'] | null =
+        artifactTypeRaw === 'playbook' || artifactTypeRaw === 'action_catalog' || artifactTypeRaw === 'policy_rule'
+          ? artifactTypeRaw
+          : null;
+      if (!artifactType) return null;
+
+      const title = String(obj.title ?? '').trim();
+      const rationale = String(obj.rationale ?? '').trim();
+      const priorityRaw = String(obj.priority ?? 'medium').toLowerCase();
+      const priority: MissingArtifactDraft['priority'] =
+        priorityRaw === 'low' || priorityRaw === 'high' || priorityRaw === 'medium'
+          ? priorityRaw
+          : 'medium';
+      const draft = obj.draft && typeof obj.draft === 'object' ? (obj.draft as Record<string, unknown>) : {};
+      if (!title || !rationale) return null;
+
+      return { artifactType, title, rationale, priority, draft };
+    })
+    .filter((item): item is MissingArtifactDraft => Boolean(item))
+    .slice(0, 6);
+
+  return {
+    playbookAdjustments: sanitizeGuidanceAdjustments(source.playbookAdjustments).slice(0, 6),
+    policyRuleAdjustments: sanitizeGuidanceAdjustments(source.policyRuleAdjustments).slice(0, 6),
+    actionCatalogAdjustments: sanitizeGuidanceAdjustments(source.actionCatalogAdjustments).slice(0, 6),
+    operationalGuidance,
+    missingArtifacts,
+  };
+}
+
+function getGuestRecoveryChatVerbosity(): ChatVerbosity {
+  const value = String(process.env.GUEST_RECOVERY_CHAT_VERBOSITY || 'normal').trim().toLowerCase();
+  return value === 'concise' || value === 'detailed' || value === 'normal' ? value : 'normal';
+}
+
+function appendGuidanceToMarkdown(base: string, guidance: GuidanceBundle, verbosity: ChatVerbosity = 'normal') {
+  const hasGuidance =
+    guidance.playbookAdjustments.length > 0 ||
+    guidance.policyRuleAdjustments.length > 0 ||
+    guidance.actionCatalogAdjustments.length > 0 ||
+    guidance.operationalGuidance.length > 0 ||
+    guidance.missingArtifacts.length > 0;
+
+  if (!hasGuidance) return base;
+
+  if (verbosity === 'concise') {
+    if (guidance.missingArtifacts.length === 0) {
+      return base;
+    }
+
+    return [
+      base,
+      '',
+      '---',
+      '**Missing artifacts to consider**',
+      ...guidance.missingArtifacts.map(
+        (artifact) => `- **${artifact.artifactType}**: ${artifact.title} (\`${artifact.priority}\`)`,
+      ),
+    ].join('\n');
+  }
+
+  const renderAdjustments = (title: string, items: GuidanceAdjustment[]) => {
+    if (items.length === 0) return '';
+    const lines = items.map(
+      (item) =>
+        `- **${item.title}** (\`${item.priority}\`) - ${item.rationale}${item.suggestedChange ? ` Suggested change: ${item.suggestedChange}` : ''}`,
+    );
+    return `\n**${title}**\n${lines.join('\n')}\n`;
+  };
+
+  const guidanceLines = guidance.operationalGuidance.map((item) => `- ${item}`).join('\n');
+  const operationalSection = guidanceLines ? `\n**Operational Guidance**\n${guidanceLines}\n` : '';
+  const missingArtifactsSection = guidance.missingArtifacts.length > 0
+    ? [
+      '\n**Missing artifacts to generate (drafts for reconsideration)**',
+      ...guidance.missingArtifacts.map(
+        (artifact) =>
+          `- **${artifact.artifactType}**: ${artifact.title} (\`${artifact.priority}\`) - ${artifact.rationale}`,
+      ),
+      '',
+    ].join('\n')
+    : '';
+
+  return [
+    base,
+    '',
+    '---',
+    '### Suggested Recovery System Adjustments',
+    renderAdjustments('Playbook updates', guidance.playbookAdjustments),
+    renderAdjustments('Policy rule updates', guidance.policyRuleAdjustments),
+    renderAdjustments('Action catalog updates', guidance.actionCatalogAdjustments),
+    operationalSection,
+    missingArtifactsSection,
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+function buildCoverageFallbackGuidance(params: {
+  incidentType: string;
+  incidentCategory: string;
+  incidentSeverity: string;
+  guestTier: string;
+  hasPlaybooks: boolean;
+  hasPolicyRules: boolean;
+  hasActionCatalog: boolean;
+}): GuidanceBundle {
+  const {
+    incidentType,
+    incidentCategory,
+    incidentSeverity,
+    guestTier,
+    hasPlaybooks,
+    hasPolicyRules,
+    hasActionCatalog,
+  } = params;
+
+  const missingArtifacts: MissingArtifactDraft[] = [];
+  const actionCatalogAdjustments: GuidanceAdjustment[] = [];
+  const playbookAdjustments: GuidanceAdjustment[] = [];
+  const policyRuleAdjustments: GuidanceAdjustment[] = [];
+  const operationalGuidance: string[] = [];
+
+  if (!hasActionCatalog) {
+    missingArtifacts.push({
+      artifactType: 'action_catalog',
+      title: `Create ${incidentType} / ${incidentCategory} recovery actions`,
+      rationale: 'No eligible actions are defined for this incident context and loyalty segment.',
+      priority: 'high',
+      draft: {
+        incidentType,
+        incidentCategory,
+        loyaltyTier: guestTier || 'any',
+        candidates: [
+          {
+            actionId: `ac_${incidentType}_${incidentCategory}_${guestTier || 'any'}_stabilize`.replace(/[^a-z0-9_]/gi, '_').toLowerCase(),
+            label: 'Immediate guest stabilization outreach',
+            description: 'Contact guest quickly, acknowledge issue, provide timeline and ownership.',
+            estimatedValue: 0,
+          },
+          {
+            actionId: `ac_${incidentType}_${incidentCategory}_${guestTier || 'any'}_restore`.replace(/[^a-z0-9_]/gi, '_').toLowerCase(),
+            label: 'Context-specific service restoration',
+            description: 'Apply targeted restoration step matching incident severity and impact.',
+            estimatedValue: 0,
+          },
+        ],
+      },
+    });
+    actionCatalogAdjustments.push({
+      title: 'Backfill missing action catalog coverage',
+      rationale: `Define at least 2 active actions for ${incidentType}/${incidentCategory} to avoid manual-only planning.`,
+      priority: 'high',
+      suggestedChange: 'Insert draft actions, route to supervisor review, and link to applicable playbooks.',
+    });
+  }
+
+  if (!hasPlaybooks) {
+    missingArtifacts.push({
+      artifactType: 'playbook',
+      title: `Create playbook for ${incidentType} / ${incidentSeverity}`,
+      rationale: 'No active playbook matches this incident type and severity.',
+      priority: 'high',
+      draft: {
+        incidentType,
+        severity: incidentSeverity || 'medium',
+        loyaltyTier: guestTier || 'any',
+        title: `${incidentType} recovery baseline`,
+        actionIds: ['<insert-action-id-1>', '<insert-action-id-2>'],
+      },
+    });
+    playbookAdjustments.push({
+      title: 'Introduce baseline playbook coverage',
+      rationale: `Create a standard recovery sequence for ${incidentType} incidents at ${incidentSeverity} severity.`,
+      priority: 'high',
+      suggestedChange: 'Seed playbook with generated action candidates and review routing checkpoints.',
+    });
+  }
+
+  if (!hasPolicyRules) {
+    missingArtifacts.push({
+      artifactType: 'policy_rule',
+      title: `Create policy guardrail for ${incidentType} / ${incidentSeverity}`,
+      rationale: 'No enabled policy rules matched this incident context.',
+      priority: 'medium',
+      draft: {
+        incidentType,
+        severity: incidentSeverity || 'medium',
+        name: `${incidentType} governance rule`,
+        constraints: {
+          requiresSupervisorApproval: true,
+          maxAutoCompensation: 0,
+          requiredFollowUpMinutes: 30,
+        },
+      },
+    });
+    policyRuleAdjustments.push({
+      title: 'Add policy constraints for uncovered scenario',
+      rationale: 'Define governance for approvals, escalation timing, and compensation boundaries.',
+      priority: 'medium',
+      suggestedChange: 'Insert draft policy and require supervisor sign-off before activation.',
+    });
+  }
+
+  if (missingArtifacts.length > 0) {
+    operationalGuidance.push('Generated drafts should be inserted as pending and attached to incident reconsideration queue.');
+    operationalGuidance.push('Re-run proposal generation after draft artifacts are approved.');
+  }
+
+  return {
+    playbookAdjustments,
+    policyRuleAdjustments,
+    actionCatalogAdjustments,
+    operationalGuidance,
+    missingArtifacts,
+  };
+}
+
+async function generateGuestRecoveryLLMResponse(params: {
+  query: string;
+  recentTurns: ChatTurn[];
+  primaryIncident?: any;
+  relatedIncidents: any[];
+  guest?: any;
+  proposal?: any;
+  matchedPlaybooks: any[];
+  matchedPolicyRules: any[];
+  matchedActionCatalog: any[];
+  coverage: {
+    hasPlaybooks: boolean;
+    hasPolicyRules: boolean;
+    hasActionCatalog: boolean;
+    incidentType: string;
+    incidentCategory: string;
+    incidentSeverity: string;
+    guestTier: string;
+  };
+  verbosity: ChatVerbosity;
+}) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error('OPENAI_API_KEY is missing');
+  }
+
+  const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+  const recentTurns = params.recentTurns.slice(-6).map((turn) => ({
+    role: turn.role,
+    message: turn.message,
+    createdAt: turn.createdAt,
+  }));
+
+  const systemMessage = [
+    'You are the VoyageOps guest recovery copilot.',
+    'Respond as a conversational assistant to a guest_recovery_worker.',
+    'Ground every recommendation in the supplied incident, guest profile, proposal, playbook, policy, and action-catalog context.',
+    'If actions/playbooks/policies are missing, still give conversational guidance and propose concrete missing artifacts to generate.',
+    'Be practical, safety-conscious, and avoid inventing unavailable data.',
+    params.verbosity === 'concise'
+      ? 'Keep assistantResponse concise: 3-5 bullets maximum, no repeated headings, no long recap, and only mention missing artifacts when directly relevant.'
+      : params.verbosity === 'detailed'
+        ? 'Use a detailed response with clear sections, rationale, tradeoffs, and next steps.'
+        : 'Use a balanced response with concise sections and only necessary detail.',
+    'Return JSON only with this schema:',
+    '{',
+    '  "assistantResponse": "markdown string with clear, conversational guidance",',
+    '  "guidance": {',
+    '    "playbookAdjustments": [{"title":"", "rationale":"", "priority":"low|medium|high", "suggestedChange":""}],',
+    '    "policyRuleAdjustments": [{"title":"", "rationale":"", "priority":"low|medium|high", "suggestedChange":""}],',
+    '    "actionCatalogAdjustments": [{"title":"", "rationale":"", "priority":"low|medium|high", "suggestedChange":""}],',
+    '    "operationalGuidance": ["short actionable line"],',
+    '    "missingArtifacts": [{"artifactType":"playbook|action_catalog|policy_rule","title":"","rationale":"","priority":"low|medium|high","draft":{}}]',
+    '  }',
+    '}',
+    'If no adjustments are needed for a section, return an empty array.',
+  ].join(' ');
+
+  const userPayload = {
+    operatorQuery: params.query,
+    recentTurns,
+    currentContext: {
+      incident: params.primaryIncident || null,
+      guest: params.guest || null,
+      relatedIncidents: params.relatedIncidents.slice(0, 3),
+      currentProposal: params.proposal || null,
+    },
+    retrievalContext: {
+      playbooks: params.matchedPlaybooks.slice(0, 4),
+      policyRules: params.matchedPolicyRules.slice(0, 6),
+      actionCatalog: params.matchedActionCatalog.slice(0, 8),
+      coverage: params.coverage,
+    },
+    objectives: [
+      params.verbosity === 'concise'
+        ? 'Answer in 3-5 high-signal bullets without duplicating the guidance fields.'
+        : 'Give an empathetic but operationally concrete response.',
+      'Explain how to adapt recovery approach to this incident context.',
+      'Provide actionable guidance the worker/application can apply.',
+      'Recommend improvements to playbooks, policy rules, and action catalog only when warranted.',
+    ],
+    responsePreferences: {
+      verbosity: params.verbosity,
+      conciseMode: params.verbosity === 'concise',
+      maxBullets: params.verbosity === 'concise' ? 5 : undefined,
+      avoidRepeatedSections: params.verbosity === 'concise',
+      includeMissingArtifactsOnlyIfRelevant: true,
+    },
+  };
+
+  const completion = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      temperature: 0.3,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: systemMessage },
+        { role: 'user', content: JSON.stringify(userPayload) },
+      ],
+    }),
+  });
+
+  if (!completion.ok) {
+    const errorText = await completion.text();
+    throw new Error(`Chat completion failed: ${completion.status} ${errorText}`);
+  }
+
+  const payload = await completion.json();
+  const content = payload?.choices?.[0]?.message?.content;
+  if (!content || typeof content !== 'string') {
+    throw new Error('Chat completion returned no message content');
+  }
+
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(content);
+  } catch (error) {
+    throw new Error(`Chat completion returned non-JSON content: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  const assistantResponse = String(parsed.assistantResponse ?? '').trim();
+  if (!assistantResponse) {
+    throw new Error('Chat completion JSON missing assistantResponse');
+  }
+
+  const guidance = sanitizeGuidanceBundle(parsed.guidance);
+  return { assistantResponse, guidance };
 }
 
 function buildGuestRecoveryChatResponse(params: {
@@ -1372,6 +1796,52 @@ router.get('/incidents/prioritized', async (req, res) => {
   }
 });
 
+// API: Incident by ID (with optional guest profile for quick UI resolution)
+router.get('/incidents/:id', async (req, res) => {
+  try {
+    const incidentId = String(req.params.id || '').trim();
+    if (!incidentId) {
+      return res.status(400).json({ error: 'incident id required' });
+    }
+
+    const incidentResult = await db.cluster.query(
+      `
+      SELECT META(i).id AS docId, i.*
+      FROM voyageops.guests.incidents i
+      WHERE i.incidentId = $incidentId OR META(i).id = $incidentId
+      LIMIT 1
+      `,
+      { parameters: { incidentId }, timeout: 10000 },
+    );
+
+    if (incidentResult.rows.length === 0) {
+      return res.status(404).json({ error: 'incident not found' });
+    }
+
+    const incident = incidentResult.rows[0] as Record<string, unknown>;
+    const incidentGuestId = String(incident.guestId ?? '').trim();
+    let guest: Record<string, unknown> | undefined;
+
+    if (incidentGuestId) {
+      const guestResult = await db.cluster.query(
+        `
+        SELECT g.*
+        FROM voyageops.guests.guests g
+        WHERE g.guestId = $guestId OR META(g).id = $guestId
+        LIMIT 1
+        `,
+        { parameters: { guestId: incidentGuestId }, timeout: 10000 },
+      );
+      guest = guestResult.rows[0] as Record<string, unknown> | undefined;
+    }
+
+    return res.json({ incident, guest });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ error: 'Failed to load incident' });
+  }
+});
+
 // API: Excursions
 router.get('/excursions', async (req, res) => {
   try {
@@ -1758,8 +2228,107 @@ router.post('/agent-query', async (req, res) => {
       responseCitations = [incidentCitation, guestCitation].filter(Boolean);
     }
 
-    const debugSignature = '[debug-signature: routes.ts@agent-query-v2026-04-23b]';
-    const responseWithDebug = `${response}\n\n${debugSignature}`;
+    const incidentType = String(primaryIncident?.type || '').trim().toLowerCase();
+    const incidentCategory = String(primaryIncident?.category || '').trim().toLowerCase();
+    const incidentSeverity = String(primaryIncident?.severity || '').trim().toLowerCase();
+    const guestTier = String(primaryGuest?.loyaltyTier || '').trim().toLowerCase();
+
+    let matchedPlaybooks: any[] = [];
+    let matchedPolicyRules: any[] = [];
+    let matchedActionCatalog: any[] = [];
+
+    if (primaryIncident) {
+      const [playbooksResult, policyRulesResult, actionCatalogResult] = await Promise.all([
+        db.cluster.query(
+          `
+          SELECT META(p).id AS playbookId, p.title, p.incidentType, p.severity, p.loyaltyTier, p.actionIds
+          FROM voyageops.agent.playbooks p
+          WHERE p.active = true
+            AND LOWER(REPLACE(REPLACE(TRIM(p.incidentType), " ", "-"), "_", "-")) = $incidentType
+            AND (
+              (IS_STRING(p.severity) AND LOWER(TRIM(p.severity)) = $severity)
+              OR (IS_ARRAY(p.severity) AND ANY sev IN p.severity SATISFIES LOWER(TRIM(sev)) = $severity END)
+            )
+          ORDER BY p.updatedAt DESC
+          LIMIT 6
+          `,
+          { parameters: { incidentType, severity: incidentSeverity }, timeout: 10000 },
+        ),
+        db.cluster.query(
+          `
+          SELECT META(r).id AS ruleDocId, r.ruleId, r.name, r.description, r.priority, r.constraints, r.incidentType, r.severity
+          FROM voyageops.agent.policy_rules r
+          WHERE r.enabled = true
+            AND (r.incidentType IS MISSING OR LOWER(TRIM(r.incidentType)) = $incidentType)
+            AND (r.severity IS MISSING OR LOWER(TRIM(r.severity)) = $severity)
+          ORDER BY r.priority DESC
+          LIMIT 10
+          `,
+          { parameters: { incidentType, severity: incidentSeverity }, timeout: 10000 },
+        ),
+        db.cluster.query(
+          `
+          SELECT a.actionId, a.label, a.description, a.estimatedValue, a.incidentType, a.incidentCategory, a.loyaltyTier
+          FROM voyageops.agent.action_catalog a
+          WHERE a.active = true
+            AND LOWER(TRIM(a.incidentType)) = $incidentType
+            AND LOWER(TRIM(a.incidentCategory)) = $incidentCategory
+            AND (
+              (IS_STRING(a.loyaltyTier) AND LOWER(TRIM(a.loyaltyTier)) IN ["any", $loyaltyTier])
+              OR (IS_ARRAY(a.loyaltyTier) AND ANY tier IN a.loyaltyTier SATISFIES LOWER(TRIM(tier)) IN ["any", $loyaltyTier] END)
+            )
+          ORDER BY a.estimatedValue DESC
+          LIMIT 12
+          `,
+          { parameters: { incidentType, incidentCategory, loyaltyTier: guestTier || 'any' }, timeout: 10000 },
+        ),
+      ]);
+
+      matchedPlaybooks = playbooksResult.rows;
+      matchedPolicyRules = policyRulesResult.rows;
+      matchedActionCatalog = actionCatalogResult.rows;
+    }
+
+    let finalResponse = response;
+    let guidance: GuidanceBundle = {
+      playbookAdjustments: [],
+      policyRuleAdjustments: [],
+      actionCatalogAdjustments: [],
+      operationalGuidance: [],
+      missingArtifacts: [],
+    };
+    const coverage = {
+      hasPlaybooks: matchedPlaybooks.length > 0,
+      hasPolicyRules: matchedPolicyRules.length > 0,
+      hasActionCatalog: matchedActionCatalog.length > 0,
+      incidentType,
+      incidentCategory,
+      incidentSeverity,
+      guestTier,
+    };
+    const chatVerbosity = getGuestRecoveryChatVerbosity();
+
+    try {
+      const llmChat = await generateGuestRecoveryLLMResponse({
+        query,
+        recentTurns,
+        primaryIncident,
+        relatedIncidents: incidents,
+        guest: primaryGuest,
+        proposal,
+        matchedPlaybooks,
+        matchedPolicyRules,
+        matchedActionCatalog,
+        coverage,
+        verbosity: chatVerbosity,
+      });
+      guidance = llmChat.guidance;
+      finalResponse = appendGuidanceToMarkdown(llmChat.assistantResponse, llmChat.guidance, chatVerbosity);
+    } catch (error) {
+      console.warn('LLM guest-recovery chat unavailable, using deterministic response:', error instanceof Error ? error.message : String(error));
+      guidance = buildCoverageFallbackGuidance(coverage);
+      finalResponse = appendGuidanceToMarkdown(response, guidance, chatVerbosity);
+    }
 
     const responseIncidentId = String(incidents[0]?.incidentId || incidents[0]?.id || incidents[0]?.docId || requestedIncidentId || '');
     const responseGuestId = String(incidents[0]?.guestId || requestedGuestId || '');
@@ -1767,7 +2336,7 @@ router.post('/agent-query', async (req, res) => {
     await persistChatTurn({
       sessionId,
       role: 'assistant',
-      message: responseWithDebug,
+      message: finalResponse,
       createdAt: new Date().toISOString(),
       agentType,
       incidentId: responseIncidentId || undefined,
@@ -1776,8 +2345,9 @@ router.post('/agent-query', async (req, res) => {
 
     failurePhase = 'respond-success';
     res.json({
-      response: responseWithDebug,
+      response: finalResponse,
       incidents,
+      guidance,
       metadata: {
         sessionId,
         recentTurnsUsed: recentTurns.length,

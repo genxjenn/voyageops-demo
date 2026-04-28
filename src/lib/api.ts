@@ -57,6 +57,11 @@ interface GuestWithIncidents {
   incidents: IncidentRecord[];
 }
 
+interface IncidentWithGuest {
+  incident: IncidentRecord;
+  guest?: GuestProfile;
+}
+
 export interface PrioritizedIncident {
   incident: IncidentRecord;
   guest: GuestProfile;
@@ -126,6 +131,34 @@ export interface AgentQueryMetadata {
 export interface AgentQueryResponse {
   response: string;
   incidents?: IncidentRecord[];
+  guidance?: {
+    playbookAdjustments?: Array<{
+      title: string;
+      rationale: string;
+      priority: "low" | "medium" | "high";
+      suggestedChange?: string;
+    }>;
+    policyRuleAdjustments?: Array<{
+      title: string;
+      rationale: string;
+      priority: "low" | "medium" | "high";
+      suggestedChange?: string;
+    }>;
+    actionCatalogAdjustments?: Array<{
+      title: string;
+      rationale: string;
+      priority: "low" | "medium" | "high";
+      suggestedChange?: string;
+    }>;
+    operationalGuidance?: string[];
+    missingArtifacts?: Array<{
+      artifactType: "playbook" | "action_catalog" | "policy_rule";
+      title: string;
+      rationale: string;
+      priority: "low" | "medium" | "high";
+      draft: Record<string, unknown>;
+    }>;
+  };
   metadata?: AgentQueryMetadata;
 }
 
@@ -264,6 +297,13 @@ export const api = {
   incidents: async (filters?: { severity?: string; status?: string; guestId?: string }) => {
     const rows = await fetchJson<Record<string, unknown>[]>("/api/incidents", filters);
     return rows.map(normalizeIncident);
+  },
+  incidentById: async (incidentId: string) => {
+    const row = await fetchJson<{ incident: Record<string, unknown>; guest?: Record<string, unknown> }>(`/api/incidents/${incidentId}`);
+    return {
+      incident: normalizeIncident((row.incident as Record<string, unknown>) ?? {}),
+      guest: row.guest ? normalizeGuest(row.guest as Record<string, unknown>) : undefined,
+    } as IncidentWithGuest;
   },
   prioritizedIncidents: async () => {
     const rows = await fetchJson<Record<string, unknown>[]>('/api/incidents/prioritized');

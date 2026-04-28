@@ -1,12 +1,13 @@
 import { AgentChat } from "@/components/AgentChat";
 import { StatusBadge } from "@/components/StatusBadge";
-import { User, Crown, CreditCard, Ship, MessageSquare, Star, X } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
-import { api, type GuestProfile, type IncidentRecord, type ActionProposal, type PrioritizedIncident } from "@/lib/api";
+import { User, Crown, CreditCard, Ship, MessageSquare, Star } from "lucide-react";
+import { useQuery, useQueries } from "@tanstack/react-query";
+import { api, type AgentQueryResponse, type GuestProfile, type IncidentRecord, type ActionProposal, type PrioritizedIncident } from "@/lib/api";
 import { parseTimestamp } from "@/lib/utils";
 import { useEffect, useState } from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
+import ReactMarkdown from "react-markdown";
 
 function getGuestDisplayName(guest: GuestProfile | undefined) {
   return guest?.fullName ?? guest?.name ?? "Unknown guest";
@@ -42,6 +43,59 @@ function getGuestIdentifier(guest: GuestProfile | undefined) {
 
 function getIncidentIdentifier(incident: IncidentRecord | undefined) {
   return incident?.incidentId ?? incident?.id ?? "Unknown incident";
+}
+
+function extractIncidentIdsFromCommand(command: string): string[] {
+  const normalized = command.replace(/[\u2010-\u2015\u2212]/g, "-");
+  const matches = normalized.match(/\bINS?_[A-Z0-9-]+_[A-Z0-9-]+(?:::[A-Za-z0-9_-]+)?\b/gi) ?? [];
+  return matches
+    .map((raw) => {
+      const trimmed = raw.trim().toUpperCase();
+      return trimmed.startsWith("INS_") ? `IN_${trimmed.slice(4)}` : trimmed;
+    })
+    .filter(Boolean);
+}
+
+interface ChatFocusedPlan {
+  incidentId: string;
+  query: string;
+  response: string;
+  guidance?: AgentQueryResponse["guidance"];
+  createdAt: string;
+}
+
+interface ChatFocusedIncidentEntry {
+  incidentId: string;
+  incident: IncidentRecord;
+  guest?: GuestProfile;
+}
+
+type BadgeStatus = Parameters<typeof StatusBadge>[0]["status"];
+const BADGE_STATUSES: BadgeStatus[] = [
+  "open",
+  "reviewing",
+  "approved",
+  "executed",
+  "closed",
+  "pending",
+  "rejected",
+  "scheduled",
+  "disrupted",
+  "cancelled",
+  "rebooked",
+  "normal",
+  "busy",
+  "overloaded",
+  "maintenance",
+  "critical",
+  "high",
+  "medium",
+  "low",
+];
+
+function toBadgeStatus(status: string | undefined, fallback: BadgeStatus = "open"): BadgeStatus {
+  const normalized = String(status ?? "").toLowerCase();
+  return BADGE_STATUSES.includes(normalized as BadgeStatus) ? (normalized as BadgeStatus) : fallback;
 }
 
 function formatCurrency(value: number | undefined) {
@@ -249,6 +303,7 @@ const GuestRecoveryAgent = () => {
   const [lastAdjustmentPrompt, setLastAdjustmentPrompt] = useState<string | null>(null);
   const [chattedIncidentIds, setChattedIncidentIds] = useState<string[]>([]);
   const [selectedChatIncidentId, setSelectedChatIncidentId] = useState<string | null>(null);
+  const [chatFocusedPlansByIncidentId, setChatFocusedPlansByIncidentId] = useState<Record<string, ChatFocusedPlan>>({});
 
   const guestsQuery = useQuery({ queryKey: ["guests"], queryFn: api.guests });
   const guests = guestsQuery.data ?? [];
@@ -281,12 +336,12 @@ const GuestRecoveryAgent = () => {
     enabled: Boolean(selectedGuestId),
     refetchInterval: 10000,
   });
-  const chatFocusedProposalsQuery = useQuery({
+  const chatFocusedProposalQuery = useQuery({
     queryKey: ["proposals", "chat-focused", selectedChatIncidentId],
-    queryFn: () => api.actionProposals(undefined, selectedChatIncidentId!),
+    queryFn: () => api.actionProposals(undefined, selectedChatIncidentId ?? undefined),
     enabled: Boolean(selectedChatIncidentId),
+    refetchInterval: 10000,
   });
-  const chatFocusedProposals = chatFocusedProposalsQuery.data ?? [];
 
   const topGuestIds = Array.from(
     new Set(
@@ -380,19 +435,40 @@ const GuestRecoveryAgent = () => {
   const actionCount = displayProposal?.actions.length ?? 0;
   const afterRisk = Math.max(4, beforeRisk - Math.min(12, actionCount * 2));
   const actionLabels = displayProposal?.actions.map(action => action.label).join(", ") ?? "No proposed actions available.";
+  const incidentLookup = new Map<string, IncidentRecord>();
+  incidents.forEach((entry) => incidentLookup.set(getIncidentIdentifier(entry), entry));
+  topRankedIncidents.forEach(({ incident: rankedIncident }) => incidentLookup.set(getIncidentIdentifier(rankedIncident), rankedIncident));
+  const rankedGuestByIncidentId = new Map(
+    topRankedIncidents.map(({ incident: rankedIncident, guest: rankedGuest }) => [getIncidentIdentifier(rankedIncident), rankedGuest] as const),
+  );
+  const chatFocusedIncidentQueries = useQueries({
+    queries: chattedIncidentIds.map((incidentId) => ({
+      queryKey: ["incidents", "by-id", incidentId],
+      queryFn: () => api.incidentById(incidentId),
+      enabled: Boolean(incidentId),
+      staleTime: 30000,
+    })),
+  });
+  const chatFocusedIncidents = chattedIncidentIds
+    .map((incidentId, idx): ChatFocusedIncidentEntry | null => {
+      const fromQuery = chatFocusedIncidentQueries[idx]?.data;
+      const incident = fromQuery?.incident ?? incidentLookup.get(incidentId);
+      if (!incident) return null;
+      const guestFromIncident = findGuestById(guests, incident.guestId);
+      const guestFromRank = rankedGuestByIncidentId.get(incidentId);
+      const guest = fromQuery?.guest ?? guestFromIncident ?? guestFromRank;
+      return { incidentId, incident, guest };
+    })
+    .filter((entry): entry is ChatFocusedIncidentEntry => Boolean(entry));
+  const selectedChatFocusedEntry = selectedChatIncidentId
+    ? chatFocusedIncidents.find((entry) => entry.incidentId === selectedChatIncidentId)
+    : undefined;
+  const focusedProposal = (chatFocusedProposalQuery.data ?? [])[0];
+  const selectedChatPlan = selectedChatIncidentId ? chatFocusedPlansByIncidentId[selectedChatIncidentId] : undefined;
 
   const handleChatCommand = (command: string) => {
     const normalized = command.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
     let nextSelectedGuestId = selectedGuestId;
-
-    const incidentIdMatches = command.match(/\bIN_[A-Z]+-\d+_\d+\b/gi) ?? [];
-    const mentionedIncidentIds = [...new Set(incidentIdMatches.map(id => id.toUpperCase()))];
-    if (mentionedIncidentIds.length > 0) {
-      setChattedIncidentIds(prev => {
-        const filtered = prev.filter(id => !mentionedIncidentIds.includes(id));
-        return [...mentionedIncidentIds, ...filtered].slice(0, 10);
-      });
-    }
 
     const guestFromCommand = findGuestFromCommandText(guests, normalized);
     const commandGuestId = getGuestIdentifier(guestFromCommand);
@@ -406,6 +482,46 @@ const GuestRecoveryAgent = () => {
     if (/(adjust|change|refine|update|swap|replace|upgrade|downgrade|vip|budget|cheaper|cheapest|lower|cost|call|follow up|follow-up|personal|expedite|urgent)/.test(normalized)) {
       setLastAdjustmentPrompt(command);
     }
+
+    const mentionedIncidentIdsFromCommand = extractIncidentIdsFromCommand(command);
+    if (mentionedIncidentIdsFromCommand.length > 0) {
+      setChattedIncidentIds((prev) => {
+        const deduped = [
+          ...mentionedIncidentIdsFromCommand,
+          ...prev.filter((id) => !mentionedIncidentIdsFromCommand.includes(id)),
+        ];
+        return deduped.slice(0, 12);
+      });
+      setSelectedChatIncidentId(mentionedIncidentIdsFromCommand[0]);
+    }
+  };
+
+  const handleAgentResponse = ({ query, result }: { query: string; result: AgentQueryResponse }) => {
+    const queryIncidentIds = extractIncidentIdsFromCommand(query);
+    const responseIncidentIds = (result.incidents ?? [])
+      .map((entry) => getIncidentIdentifier(entry))
+      .filter((incidentId) => incidentId && incidentId !== "Unknown incident");
+    const incidentIds = Array.from(new Set([...queryIncidentIds, ...responseIncidentIds]));
+    if (incidentIds.length === 0) return;
+
+    setChattedIncidentIds((prev) => {
+      const deduped = [...incidentIds, ...prev.filter((id) => !incidentIds.includes(id))];
+      return deduped.slice(0, 12);
+    });
+    setSelectedChatIncidentId(queryIncidentIds[0] ?? incidentIds[0]);
+    setChatFocusedPlansByIncidentId((prev) => {
+      const next = { ...prev };
+      incidentIds.forEach((incidentId) => {
+        next[incidentId] = {
+          incidentId,
+          query,
+          response: result.response,
+          guidance: result.guidance,
+          createdAt: new Date().toISOString(),
+        };
+      });
+      return next;
+    });
   };
 
   useEffect(() => {
@@ -420,7 +536,12 @@ const GuestRecoveryAgent = () => {
       </div>
 
       {/* NLP Chat Interface */}
-      <AgentChat agentType="guest-recovery" className="h-[520px]" onCommand={handleChatCommand} />
+      <AgentChat
+        agentType="guest-recovery"
+        className="h-[520px]"
+        onCommand={handleChatCommand}
+        onAgentResponse={handleAgentResponse}
+      />
 
       <div className="grid gap-6 lg:grid-cols-3">
         {/* Left Column - Guest Profile & Incident */}
@@ -549,6 +670,17 @@ const GuestRecoveryAgent = () => {
               ))}
             </div>
           </div>
+
+          {/* Demo Scenario */}
+          <div className="rounded-lg border border-primary/30 bg-primary/5 p-4">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-primary mb-2">Demo Scenario</h3>
+            <div className="text-xs text-muted-foreground space-y-2 leading-relaxed">
+              <p><strong className="text-foreground">Trigger:</strong> {incident ? `${getGuestDisplayName(guest)} was linked to ${incident.type.toLowerCase()} in ${incident.category}. ${incident.description}` : `No active incident is currently associated with ${getGuestDisplayName(guest)}.`}</p>
+              <p><strong className="text-foreground">Analysis:</strong> The agent correlated booking {guest?.bookingId ?? "Unknown"}, loyalty tier {guest?.loyaltyTier ?? "Unknown"}, sailing history {typeof guest?.sailingHistory === "number" ? `${guest.sailingHistory} voyages` : "Unknown"}, and onboard spend {formatCurrency(guest?.onboardSpend)}{scenarioVenue ? ` with ${scenarioVenue.name} operating at ${occupancyPct}% capacity${staffingGapPct ? ` and ${staffingGapPct}% understaffing` : ""}${typeof scenarioVenue.waitTime === "number" ? ` plus a ${scenarioVenue.waitTime}-minute wait time` : ""}` : ""}.</p>
+              <p><strong className="text-foreground">Recovery Plan:</strong> {displayProposal ? `${displayProposal.actions.length}-action plan ${adjustedProposalPreview ? `previewed from chat feedback on worker proposal ${selectedProposal?.proposalId}` : `from worker proposal ${displayProposal.proposalId}`}: ${actionLabels}.` : "No worker-generated action proposal is currently available for this guest."}</p>
+              <p><strong className="text-foreground">Outcome:</strong> {displayProposal ? `Estimated ${formatCurrency(protectedValue)} in future value protected. Churn risk reduced from ${beforeRisk}% to ${afterRisk}% based on current guest value, incident severity, and the proposed actions.` : `Outcome cannot be estimated until a worker proposal is available.`}</p>
+            </div>
+          </div>
         </div>
 
         {/* Center Column - Ranked Incidents */}
@@ -621,87 +753,90 @@ const GuestRecoveryAgent = () => {
 
         {/* Right Column - Approval Queue (worker-generated action_proposals) */}
         <div className="space-y-4">
-          <h2 className="text-sm font-semibold text-foreground">Recovery Plan Approval Queue</h2>
-
-          {/* Chat Focused Plan */}
-          {selectedChatIncidentId && (
-            <div className="space-y-3 pb-4 border-b border-border">
-              <div className="flex items-center justify-between">
-                <p className="text-xs font-semibold uppercase tracking-wider text-primary flex items-center gap-1.5">
-                  <MessageSquare className="h-3.5 w-3.5" />
-                  Chat Focused Plan
+          <div className="space-y-2">
+            <h2 className="text-sm font-semibold text-foreground">Chat Focused Plan</h2>
+            <div className="rounded-lg border border-primary/30 bg-card p-4">
+              {!selectedChatIncidentId ? (
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  Ask chat about a specific incident ID to show the LLM-generated plan here.
                 </p>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  className="h-6 w-6 p-0"
-                  onClick={() => setSelectedChatIncidentId(null)}
-                >
-                  <X className="h-3.5 w-3.5" />
-                </Button>
-              </div>
-              <p className="text-[11px] font-mono text-muted-foreground">Incident: {selectedChatIncidentId}</p>
-              {chatFocusedProposalsQuery.isLoading && (
-                <div className="rounded-lg border border-border bg-card p-4">
-                  <p className="text-xs text-muted-foreground">Loading focused plan…</p>
-                </div>
-              )}
-              {!chatFocusedProposalsQuery.isLoading && chatFocusedProposals.length === 0 && (
-                <div className="rounded-lg border border-border bg-card p-4">
-                  <p className="text-xs text-muted-foreground leading-relaxed">
-                    No agent proposal found for this incident yet.
-                  </p>
-                </div>
-              )}
-              {chatFocusedProposals.map((proposal: ActionProposal) => (
-                <div key={proposal.proposalId} className="rounded-lg border border-border bg-card p-4">
-                  <div className="flex items-start justify-between gap-2 mb-3">
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Chat-Focused Plan</p>
-                      <p className="mt-1 text-sm font-medium text-foreground leading-snug">{proposal.summary ?? "Recovery plan ready for review"}</p>
+              ) : selectedChatFocusedEntry ? (
+                  <>
+                    <p className="text-[11px] font-mono text-muted-foreground">
+                      Incident: {selectedChatFocusedEntry.incidentId}
+                    </p>
+                    <p className="mt-1 text-sm font-medium text-foreground">
+                      {selectedChatFocusedEntry.guest ? getGuestDisplayName(selectedChatFocusedEntry.guest) : "Unknown guest"}
+                    </p>
+                    <div className="mt-2 flex items-center gap-2">
+                      <StatusBadge status={selectedChatFocusedEntry.incident.severity} />
+                      <StatusBadge status={selectedChatFocusedEntry.incident.status} />
                     </div>
-                    <StatusBadge status={proposal.status as any} />
-                  </div>
-                  {proposal.reasoning && (
-                    <p className="text-xs text-muted-foreground leading-relaxed mb-3 border-l-2 border-primary/30 pl-2">{proposal.reasoning}</p>
-                  )}
-                  <div className="space-y-2">
-                    {proposal.actions.map((action, index) => (
-                      <div key={action.actionId} className="rounded-lg border border-border bg-muted/30 p-3">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0 flex-1">
-                            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Action {index + 1}</p>
-                            <p className="mt-1 text-sm font-medium text-foreground">{action.label}</p>
-                            {action.description && (
-                              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{action.description}</p>
-                            )}
-                            {action.estimatedValue ? (
-                              <p className="mt-2 text-xs font-medium text-foreground">Estimated value: {formatCurrency(action.estimatedValue)}</p>
-                            ) : null}
+                    {selectedChatPlan ? (
+                      <>
+                        <p className="mt-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                          Latest Chat Plan
+                        </p>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          Prompt: <span className="text-foreground">{selectedChatPlan.query}</span>
+                        </p>
+                        <div className="mt-3 max-h-80 overflow-y-auto rounded-lg border border-border bg-muted/20 p-3">
+                          <div className="prose prose-sm max-w-none prose-headings:text-foreground prose-p:text-foreground prose-strong:text-foreground prose-li:text-foreground prose-ul:my-2 prose-ol:my-2 text-xs">
+                            <ReactMarkdown>{selectedChatPlan.response}</ReactMarkdown>
                           </div>
-                          <Button type="button" size="sm" className="shrink-0" onClick={() => undefined}>
-                            APPROVE
-                          </Button>
                         </div>
+                        {selectedChatPlan.guidance?.missingArtifacts && selectedChatPlan.guidance.missingArtifacts.length > 0 && (
+                          <div className="mt-3 rounded-lg border border-warning/30 bg-warning/5 p-3">
+                            <p className="text-[11px] font-semibold uppercase tracking-wider text-warning">
+                              Draft artifacts suggested by chat
+                            </p>
+                            <div className="mt-2 space-y-1">
+                              {selectedChatPlan.guidance.missingArtifacts.map((artifact, index) => (
+                                <p key={`${artifact.artifactType}-${index}`} className="text-xs text-muted-foreground">
+                                  • <span className="text-foreground font-medium">{artifact.artifactType}</span>: {artifact.title}
+                                </p>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <p className="mt-3 text-xs text-muted-foreground">
+                        Ask chat about this incident to show the LLM-generated plan here.
+                      </p>
+                    )}
+                    {focusedProposal && (
+                      <div className="mt-3 border-t border-border pt-3">
+                        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                          Playbook and Actions Available to Agent
+                        </p>
+                        <p className="mt-1 text-sm font-medium text-foreground">
+                          {focusedProposal.summary ?? "Recovery plan ready for review"}
+                        </p>
+                        {focusedProposal.actions.length > 0 ? (
+                          <div className="mt-2 space-y-1.5">
+                            {focusedProposal.actions.map((action) => (
+                              <p key={action.actionId} className="text-xs text-muted-foreground leading-relaxed">
+                                • <span className="text-foreground font-medium">{action.label}</span>
+                                {action.estimatedValue ? ` (${formatCurrency(action.estimatedValue)})` : ""}
+                              </p>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="mt-2 text-xs text-muted-foreground">
+                            No concrete action selected yet.
+                          </p>
+                        )}
                       </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Demo Scenario */}
-          <div className="rounded-lg border border-primary/30 bg-primary/5 p-4">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-primary mb-2">Demo Scenario</h3>
-            <div className="text-xs text-muted-foreground space-y-2 leading-relaxed">
-              <p><strong className="text-foreground">Trigger:</strong> {incident ? `${getGuestDisplayName(guest)} was linked to ${incident.type.toLowerCase()} in ${incident.category}. ${incident.description}` : `No active incident is currently associated with ${getGuestDisplayName(guest)}.`}</p>
-              <p><strong className="text-foreground">Analysis:</strong> The agent correlated booking {guest?.bookingId ?? "Unknown"}, loyalty tier {guest?.loyaltyTier ?? "Unknown"}, sailing history {typeof guest?.sailingHistory === "number" ? `${guest.sailingHistory} voyages` : "Unknown"}, and onboard spend {formatCurrency(guest?.onboardSpend)}{scenarioVenue ? ` with ${scenarioVenue.name} operating at ${occupancyPct}% capacity${staffingGapPct ? ` and ${staffingGapPct}% understaffing` : ""}${typeof scenarioVenue.waitTime === "number" ? ` plus a ${scenarioVenue.waitTime}-minute wait time` : ""}` : ""}.</p>
-              <p><strong className="text-foreground">Recovery Plan:</strong> {displayProposal ? `${displayProposal.actions.length}-action plan ${adjustedProposalPreview ? `previewed from chat feedback on worker proposal ${selectedProposal?.proposalId}` : `from worker proposal ${displayProposal.proposalId}`}: ${actionLabels}.` : "No worker-generated action proposal is currently available for this guest."}</p>
-              <p><strong className="text-foreground">Outcome:</strong> {displayProposal ? `Estimated ${formatCurrency(protectedValue)} in future value protected. Churn risk reduced from ${beforeRisk}% to ${afterRisk}% based on current guest value, incident severity, and the proposed actions.` : `Outcome cannot be estimated until a worker proposal is available.`}</p>
+                    )}
+                  </>
+              ) : (
+                <p className="text-xs text-muted-foreground">Loading incident context…</p>
+              )}
             </div>
           </div>
+
+          <h2 className="text-sm font-semibold text-foreground">Recovery Plan Approval Queue (Top-10)</h2>
 
           {adjustedProposalPreview && lastAdjustmentPrompt && (
             <div className="rounded-lg border border-warning/30 bg-warning/5 p-4">
@@ -732,7 +867,7 @@ const GuestRecoveryAgent = () => {
           {proposalsBySeverity.map(({ severity, proposals }) => (
             <div key={severity} className="space-y-3">
               <div className="flex items-center gap-2">
-                <StatusBadge status={severity as any} />
+                <StatusBadge status={toBadgeStatus(severity, "low")} />
                 <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                   {severity} severity incidents ({proposals.length})
                 </p>
@@ -746,7 +881,7 @@ const GuestRecoveryAgent = () => {
                       <p className="mt-1 text-[11px] font-mono text-muted-foreground">Incident: {proposal.incidentId}</p>
                       <p className="mt-1 text-sm font-medium text-foreground leading-snug">{proposal.summary ?? "Recovery plan ready for review"}</p>
                     </div>
-                    <StatusBadge status={proposal.status as any} />
+                    <StatusBadge status={toBadgeStatus(proposal.status)} />
                   </div>
 
                   {proposal.reasoning && (

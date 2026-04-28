@@ -9,8 +9,8 @@ const serverFile = fileURLToPath(import.meta.url);
 const serverDir = path.dirname(serverFile);
 const defaultEnvPath = path.resolve(serverDir, '../../.env');
 
-// Prefer explicit DOTENV_CONFIG_PATH when set; otherwise always load repo-root .env.
-dotenv.config({ path: process.env.DOTENV_CONFIG_PATH || defaultEnvPath, quiet: true });
+// Always load repo-root .env for API startup.
+dotenv.config({ path: defaultEnvPath, quiet: true });
 
 async function startServer() {
   try {
