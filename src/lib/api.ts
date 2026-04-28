@@ -57,6 +57,11 @@ interface GuestWithIncidents {
   incidents: IncidentRecord[];
 }
 
+interface IncidentWithGuest {
+  incident: IncidentRecord;
+  guest?: GuestProfile;
+}
+
 export interface PrioritizedIncident {
   incident: IncidentRecord;
   guest: GuestProfile;
@@ -94,16 +99,67 @@ export interface ActionProposal {
   updatedAt: string;
 }
 
-interface AgentQueryResponse {
+export interface AgentQueryMetadata {
+  sessionId?: string;
+  recentTurnsUsed?: number;
+  sessionAnchorIncidentId?: string;
+  sessionAnchorGuestId?: string;
+  llmModel?: string;
+  embeddingSource?: string;
+  retrievalMode?: string;
+  requestedIncidentId?: string;
+  incidentLookupStatus?: string;
+  requestedGuestId?: string;
+  guestLookupStatus?: string;
+  indexesAttempted?: string[];
+  indexesUsed?: string[];
+  contextUsed?: {
+    incidentId?: string;
+    guestId?: string;
+    proposalId?: string;
+    hasDefinedActions?: boolean;
+    hasDefinedPlaybooks?: boolean;
+    chatSessionDocId?: string;
+    recentTurnMessageIds?: string[];
+    policyRuleIds?: string[];
+    playbookIds?: string[];
+    allowedActionIds?: string[];
+    citations?: string[];
+  };
+}
+
+export interface AgentQueryResponse {
   response: string;
   incidents?: IncidentRecord[];
-  metadata?: {
-    sessionId?: string;
-    recentTurnsUsed?: number;
-    retrievalMode?: string;
-    indexesAttempted?: string[];
-    indexesUsed?: string[];
+  guidance?: {
+    playbookAdjustments?: Array<{
+      title: string;
+      rationale: string;
+      priority: "low" | "medium" | "high";
+      suggestedChange?: string;
+    }>;
+    policyRuleAdjustments?: Array<{
+      title: string;
+      rationale: string;
+      priority: "low" | "medium" | "high";
+      suggestedChange?: string;
+    }>;
+    actionCatalogAdjustments?: Array<{
+      title: string;
+      rationale: string;
+      priority: "low" | "medium" | "high";
+      suggestedChange?: string;
+    }>;
+    operationalGuidance?: string[];
+    missingArtifacts?: Array<{
+      artifactType: "playbook" | "action_catalog" | "policy_rule";
+      title: string;
+      rationale: string;
+      priority: "low" | "medium" | "high";
+      draft: Record<string, unknown>;
+    }>;
   };
+  metadata?: AgentQueryMetadata;
 }
 
 function parseVoyageNumber(value: unknown): number | undefined {
@@ -241,6 +297,13 @@ export const api = {
   incidents: async (filters?: { severity?: string; status?: string; guestId?: string }) => {
     const rows = await fetchJson<Record<string, unknown>[]>("/api/incidents", filters);
     return rows.map(normalizeIncident);
+  },
+  incidentById: async (incidentId: string) => {
+    const row = await fetchJson<{ incident: Record<string, unknown>; guest?: Record<string, unknown> }>(`/api/incidents/${incidentId}`);
+    return {
+      incident: normalizeIncident((row.incident as Record<string, unknown>) ?? {}),
+      guest: row.guest ? normalizeGuest(row.guest as Record<string, unknown>) : undefined,
+    } as IncidentWithGuest;
   },
   prioritizedIncidents: async () => {
     const rows = await fetchJson<Record<string, unknown>[]>('/api/incidents/prioritized');

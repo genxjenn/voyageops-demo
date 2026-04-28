@@ -49,6 +49,9 @@ ON voyageops.agent.chat_messages;
 -- ============================================================================
 -- 3) Operational GSI Indexes - TBD determined after testing with volume of data and query patterns
 -- ============================================================================
+CREATE INDEX ix_agent_runs_pending_createdAt
+ON voyageops.agent.agent_runs(createdAt)
+WHERE status = "pending";
 
 
 -- ============================================================================

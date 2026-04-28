@@ -56,6 +56,15 @@ class Settings:
     openai_model: str
     openai_embed_model: str
     playbook_index_name: str
+
+
+@dataclass(frozen=True)
+class ActionPolicyLoadResult:
+    actions: list[dict[str, Any]]
+    policies: list[dict[str, Any]]
+    coverage_gap_reason: str | None = None
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     load_repo_env(REPO_ROOT)
@@ -391,7 +400,7 @@ def _find_playbook_id(cluster: Cluster, index_name: str, incident_vector: list[f
     return str(playbook_id)
 
 
-def _fetch_actions_and_policies(cluster: Cluster, playbook_id: str, loyalty_tier: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _fetch_actions_and_policies(cluster: Cluster, playbook_id: str, loyalty_tier: str) -> ActionPolicyLoadResult:
     eligible_actions_query = """
     SELECT a.actionId,
            a.label,
@@ -510,16 +519,18 @@ def _fetch_actions_and_policies(cluster: Cluster, playbook_id: str, loyalty_tier
                 ) from error
 
     if not actions:
-        if not incident_type:
-            raise AgentWorkerError(
-                "load_actions",
-                f"No eligible actions found for playbook {playbook_id} and playbook incidentType is missing",
-            )
-        raise AgentWorkerError(
-            "load_actions",
-            (
-                f"No eligible actions found for playbook {playbook_id} and no fallback catalog "
-                f"actions for incidentType '{incident_type}' and loyalty tier '{str(loyalty_tier).strip()}'"
+        _emit_worker_metric(
+            "actions_missing_for_context",
+            playbookId=playbook_id,
+            incidentType=incident_type,
+            loyaltyTier=str(loyalty_tier).strip().lower(),
+        )
+        return ActionPolicyLoadResult(
+            actions=[],
+            policies=policies,
+            coverage_gap_reason=(
+                f"No eligible actions found for playbook {playbook_id} "
+                f"and incidentType '{incident_type}' / loyalty tier '{str(loyalty_tier).strip()}'"
             ),
         )
 
@@ -564,9 +575,15 @@ def _fetch_actions_and_policies(cluster: Cluster, playbook_id: str, loyalty_tier
     actions = filtered_by_tier_suffix
 
     if not actions:
-        raise AgentWorkerError(
-            "load_actions",
-            (
+        _emit_worker_metric(
+            "actions_removed_by_tier_filter",
+            playbookId=playbook_id,
+            loyaltyTier=str(loyalty_tier).strip().lower(),
+        )
+        return ActionPolicyLoadResult(
+            actions=[],
+            policies=policies,
+            coverage_gap_reason=(
                 f"No eligible actions remained after loyalty-tier suffix filtering "
                 f"for playbook {playbook_id} and loyalty tier '{str(loyalty_tier).strip()}'"
             ),
@@ -585,7 +602,7 @@ def _fetch_actions_and_policies(cluster: Cluster, playbook_id: str, loyalty_tier
         if "loyaltyTier" in action:
             del action["loyaltyTier"]
 
-    return actions, policies
+    return ActionPolicyLoadResult(actions=actions, policies=policies)
 
 
 def _build_prompt(context: Mapping[str, Any], actions: list[dict[str, Any]], policies: list[dict[str, Any]]) -> tuple[str, str]:
@@ -684,7 +701,7 @@ def _build_prompt(context: Mapping[str, Any], actions: list[dict[str, Any]], pol
     return system_message, user_prompt
 
 
-def _parse_recommendation(response_content: str, actions: list[dict[str, Any]]) -> dict[str, Any]:
+def _parse_recommendation(response_content: str, actions: list[dict[str, Any]], *, allow_safe_action_fallback: bool = False) -> dict[str, Any]:
     try:
         payload = json.loads(response_content)
     except json.JSONDecodeError as error:
@@ -727,18 +744,21 @@ def _parse_recommendation(response_content: str, actions: list[dict[str, Any]]) 
 
     selected_action = _resolve_action(payload["actionId"])
     if not selected_action:
-        # Guardrail: prevent full run failure if the model hallucinates an action ID.
-        # `actions` is relevance-ranked before prompting, so index 0 is the safest fallback.
-        if not actions:
-            raise AgentWorkerError("llm_response", f"LLM selected unknown actionId: {payload['actionId']}")
-
-        selected_action = actions[0]
         _emit_worker_metric(
-            "llm_unknown_action_fallback",
+            "llm_unknown_action_id",
             selectedActionId=str(payload.get("actionId") or ""),
-            fallbackActionId=str(selected_action.get("actionId") or ""),
             eligibleActionCount=len(actions),
         )
+        if allow_safe_action_fallback and actions:
+            selected_action = actions[0]
+            _emit_worker_metric(
+                "llm_unknown_action_fallback",
+                selectedActionId=str(payload.get("actionId") or ""),
+                fallbackActionId=str(selected_action.get("actionId") or ""),
+                eligibleActionCount=len(actions),
+            )
+        else:
+            raise AgentWorkerError("llm_response", f"LLM selected unknown actionId: {payload['actionId']}")
 
     priority = str(payload["priority"]).lower()
     if priority not in {"low", "medium", "high"}:
@@ -853,23 +873,156 @@ def _generate_recommendation(
 ) -> dict[str, Any]:
     system_message, user_prompt = _build_prompt(context, actions, policies)
 
+    base_messages = [
+        {"role": "system", "content": system_message},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    def _run_completion(messages: list[dict[str, str]]) -> str:
+        try:
+            response = client.chat.completions.create(
+                model=settings.openai_model,
+                messages=messages,
+                response_format={"type": "json_object"},
+            )
+        except Exception as error:
+            raise AgentWorkerError("llm_reasoning", f"OpenAI completion failed: {error}") from error
+
+        message_content = response.choices[0].message.content if response.choices else None
+        if not message_content:
+            raise AgentWorkerError("llm_reasoning", "OpenAI completion returned no content")
+        return message_content
+
+    first_content = _run_completion(base_messages)
     try:
-        response = client.chat.completions.create(
-            model=settings.openai_model,
-            messages=[
-                {"role": "system", "content": system_message},
-                {"role": "user", "content": user_prompt},
-            ],
-            response_format={"type": "json_object"},
+        return _parse_recommendation(first_content, actions)
+    except AgentWorkerError as error:
+        if error.step != "llm_response" or "unknown actionId" not in error.message:
+            raise
+
+        allowed_action_ids = [str(action.get("actionId") or "") for action in actions if str(action.get("actionId") or "")]
+        retry_messages = [
+            *base_messages,
+            {
+                "role": "system",
+                "content": (
+                    "Your previous response selected an invalid actionId. "
+                    f"Return valid JSON and choose actionId strictly from this list: {allowed_action_ids}"
+                ),
+            },
+        ]
+        _emit_worker_metric("llm_retry_unknown_action_id", allowedActionCount=len(allowed_action_ids))
+        retry_content = _run_completion(retry_messages)
+        return _parse_recommendation(retry_content, actions, allow_safe_action_fallback=True)
+
+
+def _build_coverage_gap_recommendation(
+    context: Mapping[str, Any],
+    playbook_id: str,
+    policies: list[dict[str, Any]],
+) -> dict[str, Any]:
+    incident_type = str(context.get("type") or "unknown").strip().lower()
+    incident_category = str(context.get("category") or "unknown").strip().lower()
+    severity = str(context.get("severity") or "medium").strip().lower()
+    loyalty_tier = str(context.get("loyaltyTier") or "any").strip().lower()
+    incident_id = str(context.get("incidentId") or "")
+    guest_id = str(context.get("guestId") or "")
+
+    action_seed = f"ac_{incident_type}_{incident_category}_{loyalty_tier}".replace("-", "_").replace(" ", "_")
+    generated_action_ids = [
+        f"{action_seed}_stabilize",
+        f"{action_seed}_restore",
+    ]
+
+    missing_artifacts: list[dict[str, Any]] = [
+        {
+            "artifactType": "action_catalog",
+            "title": f"Create action catalog entries for {incident_type}/{incident_category}",
+            "rationale": "No eligible action_catalog entries were available for this context.",
+            "priority": "high",
+            "draft": {
+                "incidentType": incident_type,
+                "incidentCategory": incident_category,
+                "loyaltyTier": loyalty_tier,
+                "candidates": [
+                    {
+                        "actionId": generated_action_ids[0],
+                        "label": "Immediate guest stabilization outreach",
+                        "description": "Acknowledge incident impact and confirm active ownership within SLA.",
+                        "estimatedValue": 0,
+                    },
+                    {
+                        "actionId": generated_action_ids[1],
+                        "label": "Context-specific service restoration",
+                        "description": "Execute incident-specific restoration and confirm service recovery with guest.",
+                        "estimatedValue": 0,
+                    },
+                ],
+            },
+        },
+        {
+            "artifactType": "playbook",
+            "title": f"Expand playbook coverage for {incident_type}/{severity}",
+            "rationale": "Current playbook does not map to actionable catalog steps for this guest context.",
+            "priority": "high",
+            "draft": {
+                "playbookIdSuggestion": f"playbooks::{incident_type}_{severity}_{loyalty_tier}_draft",
+                "title": f"{incident_type} {severity} recovery baseline",
+                "incidentType": incident_type,
+                "severity": severity,
+                "loyaltyTier": loyalty_tier,
+                "actionIds": generated_action_ids,
+            },
+        },
+    ]
+
+    if not policies:
+        missing_artifacts.append(
+            {
+                "artifactType": "policy_rule",
+                "title": f"Create policy rule for {incident_type}/{severity}",
+                "rationale": "No enabled policy rules were loaded for this incident context.",
+                "priority": "medium",
+                "draft": {
+                    "ruleIdSuggestion": f"policy_rules::{incident_type}_{severity}_draft",
+                    "name": f"{incident_type} governance guardrail",
+                    "incidentType": incident_type,
+                    "severity": severity,
+                    "constraints": {
+                        "requiresSupervisorApproval": True,
+                        "maxAutoCompensation": 0,
+                        "requiredFollowUpMinutes": 30,
+                    },
+                },
+            }
         )
-    except Exception as error:
-        raise AgentWorkerError("llm_reasoning", f"OpenAI completion failed: {error}") from error
 
-    message_content = response.choices[0].message.content if response.choices else None
-    if not message_content:
-        raise AgentWorkerError("llm_reasoning", "OpenAI completion returned no content")
-
-    return _parse_recommendation(message_content, actions)
+    return {
+        "summary": "Coverage gap detected: draft playbook/action artifacts required before recommendation can be finalized.",
+        "reasoning": (
+            f"No eligible actions were available for incident {incident_id} ({incident_type}/{incident_category}) "
+            f"and guest {guest_id}. Generated draft artifacts for reconsideration and policy review."
+        ),
+        "priority": "high",
+        "status": "coverage_gap_drafts_ready",
+        "actions": [],
+        "interactive": {
+            "operatorMessage": "Recovery recommendation paused pending approval of generated action/playbook drafts.",
+            "followUpQuestions": [
+                "Should I stage these draft artifacts for supervisor review?",
+                "Do you want standard or VIP-first handling for this context?",
+            ],
+            "alternativeActions": [],
+        },
+        "coverageGap": {
+            "playbookId": playbook_id,
+            "incidentType": incident_type,
+            "incidentCategory": incident_category,
+            "severity": severity,
+            "loyaltyTier": loyalty_tier,
+            "missingArtifacts": missing_artifacts,
+        },
+    }
 
 
 def _write_proposal(
@@ -888,12 +1041,13 @@ def _write_proposal(
         "runId": run_document["runId"],
         "guestId": run_document["guestId"],
         "incidentId": run_document["incidentId"],
-        "status": "proposed",
+        "status": str(recommendation.get("status") or "proposed"),
         "summary": recommendation["summary"],
         "reasoning": recommendation["reasoning"],
         "priority": recommendation["priority"],
         "actions": recommendation["actions"],
         "interactive": recommendation.get("interactive", {}),
+        "coverageGap": recommendation.get("coverageGap"),
         "approval": {
             "required": True,
             "approverRole": "guest-services-supervisor",
@@ -959,15 +1113,28 @@ def run_guest_recovery_agent(
                     incidentId=str(context.get("incidentId") or ""),
                 )
             playbook_id = _find_playbook_id(resolved_cluster, settings.playbook_index_name, incident_vector)
-        actions, policies = _fetch_actions_and_policies(resolved_cluster, playbook_id, str(context["loyaltyTier"]))
-        recommendation = _generate_recommendation(openai_client, settings, context, actions, policies)
+        action_policy_result = _fetch_actions_and_policies(resolved_cluster, playbook_id, str(context["loyaltyTier"]))
+        actions = action_policy_result.actions
+        policies = action_policy_result.policies
+        if action_policy_result.coverage_gap_reason:
+            recommendation = _build_coverage_gap_recommendation(context, playbook_id, policies)
+            _emit_worker_metric(
+                "coverage_gap_drafts_created",
+                incidentId=str(context.get("incidentId") or ""),
+                guestId=str(context.get("guestId") or ""),
+                playbookId=playbook_id,
+                reason=action_policy_result.coverage_gap_reason,
+            )
+        else:
+            recommendation = _generate_recommendation(openai_client, settings, context, actions, policies)
         proposal_id = _write_proposal(collections["action_proposals"], run_document, recommendation)
+        next_status = "coverage_gap_drafts_ready" if recommendation.get("status") == "coverage_gap_drafts_ready" else "awaiting_approval"
 
         _update_run_status(
             collections["agent_runs"],
             run_id,
             run_document,
-            status="awaiting_approval",
+            status=next_status,
             step="write_proposal",
             proposal_id=proposal_id,
         )
@@ -976,7 +1143,7 @@ def run_guest_recovery_agent(
             "proposalId": proposal_id,
             "incidentId": run_document["incidentId"],
             "guestId": run_document["guestId"],
-            "status": "awaiting_approval",
+            "status": next_status,
         }
     except AgentWorkerError as error:
         if run_id and run_document is not None:

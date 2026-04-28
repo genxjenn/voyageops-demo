@@ -253,6 +253,17 @@ async function resetAllIncidentsToOpen(): Promise<number> {
   return rows.length;
 }
 
+async function purgeIncidentsCollection(): Promise<number> {
+  const result = await db.cluster.query(
+    `
+    DELETE FROM \`${BUCKET}\`.guests.incidents AS i
+    RETURNING RAW META(i).id
+    `,
+    { timeout: 30000 },
+  );
+  return (result.rows as string[]).length;
+}
+
 async function resetIncidentToOpen(incidentId: string): Promise<number> {
   const resetQuery = `
     UPDATE voyageops.guests.incidents AS i
@@ -402,48 +413,19 @@ async function main() {
   const chatSessionsExists = await collectionExists('agent', 'chat_sessions');
   const chatMessagesExists = await collectionExists('agent', 'chat_messages');
 
+  const workerDistinctIncidentCountBefore = agentRunsExists ? await countDistinctAgentRunIncidents() : 0;
+  if (workerDistinctIncidentCountBefore > 0) {
+    console.log(
+      `Note: ${workerDistinctIncidentCountBefore} incident(s) currently have agent_runs docs. ` +
+      'If the worker loop is running, it may recreate proposals/runs during this reset.',
+    );
+  }
+
   if (isTargeted && !args.shouldRequeue) {
     console.log('Note: --incidentId was provided without --requeue. No pending run will be enqueued.');
   }
 
-  if (incidentsExists) {
-    if (isTargeted) {
-      if (args.shouldReloadIncidents) {
-        console.log('Ignoring --reload-incidents in targeted mode to avoid reloading all incidents.');
-      }
-      if (args.forceRebuildEmbeddings) {
-        console.log('Ignoring --rebuild-embeddings/--force-embeddings in targeted mode to avoid rebuilding all incident vectors.');
-      }
-
-      const reopenedCount = await resetIncidentToOpen(String(args.targetIncidentId));
-      console.log(`Target incident reset to open: ${reopenedCount} (${args.targetIncidentId})`);
-    } else if (args.shouldReloadIncidents) {
-      const reloaded = await upsertIncidentsFromDataFile();
-      console.log(`Reloaded incidents from data/voyageops.guests.incidents: ${reloaded}`);
-    } else {
-      const seeded = await seedIncidentsFromDataFileIfEmpty();
-      if (seeded > 0) {
-        console.log(`Seeded incidents from data/voyageops.guests.incidents: ${seeded}`);
-      }
-    }
-
-    if (!isTargeted) {
-      const backfilled = await backfillIncidentEmbeddings(args.forceRebuildEmbeddings);
-      if (backfilled > 0) {
-        if (args.forceRebuildEmbeddings) {
-          console.log(`Rebuilt embeddings for ${backfilled} incident(s).`);
-        } else {
-          console.log(`Backfilled embeddings for ${backfilled} incident(s).`);
-        }
-      }
-
-      const reopenedCount = await resetAllIncidentsToOpen();
-      console.log(`Incidents reset to open: ${reopenedCount}`);
-    }
-  } else {
-    console.log('Skipping incident reset: guests.incidents collection does not exist in this cluster.');
-  }
-
+  // Cleanup first so resets/reloads happen on a clean slate.
   if (actionProposalsExists) {
     const deletedProposals = isTargeted
       ? await purgeCollectionByIncident('agent', 'action_proposals', String(args.targetIncidentId))
@@ -458,18 +440,6 @@ async function main() {
       ? await purgeCollectionByIncident('agent', 'agent_runs', String(args.targetIncidentId))
       : await purgeCollection('agent', 'agent_runs');
     console.log(`Deleted agent_runs docs: ${deletedRuns}`);
-
-    if (args.shouldRequeue && incidentsExists) {
-      if (isTargeted) {
-        const requeuedTarget = await enqueueSingleIncident(String(args.targetIncidentId));
-        console.log(`Requeued guest-recovery pending runs for ${args.targetIncidentId}: ${requeuedTarget}`);
-      } else {
-        const requeuedPending = await enqueueAllOpenIncidents();
-        console.log(`Requeued guest-recovery pending runs: ${requeuedPending}`);
-      }
-    } else if (!args.shouldRequeue) {
-      console.log('Left agent_runs empty. Use --requeue to enqueue pending runs intentionally.');
-    }
   } else {
     console.log('Skipping run cleanup: agent.agent_runs collection does not exist in this cluster.');
   }
@@ -503,6 +473,62 @@ async function main() {
     }
   } else {
     console.log('Skipping chat message cleanup: agent.chat_messages collection does not exist in this cluster.');
+  }
+
+  // Incidents are reset/reloaded after cleanup.
+  if (incidentsExists) {
+    if (isTargeted) {
+      if (args.shouldReloadIncidents) {
+        console.log('Ignoring --reload-incidents in targeted mode to avoid reloading all incidents.');
+      }
+      if (args.forceRebuildEmbeddings) {
+        console.log('Ignoring --rebuild-embeddings/--force-embeddings in targeted mode to avoid rebuilding all incident vectors.');
+      }
+
+      const reopenedCount = await resetIncidentToOpen(String(args.targetIncidentId));
+      console.log(`Target incident reset to open: ${reopenedCount} (${args.targetIncidentId})`);
+    } else if (args.shouldReloadIncidents) {
+      const deletedIncidents = await purgeIncidentsCollection();
+      console.log(`Deleted incidents before reload: ${deletedIncidents}`);
+      const reloaded = await upsertIncidentsFromDataFile();
+      console.log(`Reloaded incidents from data/voyageops.guests.incidents: ${reloaded}`);
+    } else {
+      const seeded = await seedIncidentsFromDataFileIfEmpty();
+      if (seeded > 0) {
+        console.log(`Seeded incidents from data/voyageops.guests.incidents: ${seeded}`);
+      }
+    }
+
+    if (!isTargeted) {
+      const backfilled = await backfillIncidentEmbeddings(args.forceRebuildEmbeddings);
+      if (backfilled > 0) {
+        if (args.forceRebuildEmbeddings) {
+          console.log(`Rebuilt embeddings for ${backfilled} incident(s).`);
+        } else {
+          console.log(`Backfilled embeddings for ${backfilled} incident(s).`);
+        }
+      }
+
+      const reopenedCount = await resetAllIncidentsToOpen();
+      console.log(`Incidents reset to open: ${reopenedCount}`);
+    }
+  } else {
+    console.log('Skipping incident reset: guests.incidents collection does not exist in this cluster.');
+  }
+
+  // Requeue happens last, intentionally.
+  if (agentRunsExists) {
+    if (args.shouldRequeue && incidentsExists) {
+      if (isTargeted) {
+        const requeuedTarget = await enqueueSingleIncident(String(args.targetIncidentId));
+        console.log(`Requeued guest-recovery pending runs for ${args.targetIncidentId}: ${requeuedTarget}`);
+      } else {
+        const requeuedPending = await enqueueAllOpenIncidents();
+        console.log(`Requeued guest-recovery pending runs: ${requeuedPending}`);
+      }
+    } else if (!args.shouldRequeue) {
+      console.log('Left agent_runs empty. Use --requeue to enqueue pending runs intentionally.');
+    }
   }
 }
 

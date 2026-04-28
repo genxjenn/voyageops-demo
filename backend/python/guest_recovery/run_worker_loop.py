@@ -1,4 +1,5 @@
 import json
+import random
 import os
 import signal
 import sys
@@ -7,6 +8,7 @@ import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import timedelta
 from pathlib import Path
 
 from couchbase.options import QueryOptions
@@ -79,16 +81,98 @@ def fetch_pending_run_ids(cluster, limit: int) -> list[str]:
     ORDER BY r.createdAt ASC
     LIMIT $limit
     """
-    result = cluster.query(
-        query,
-        QueryOptions(
-            named_parameters={
-                "status": "pending",
-                "limit": limit,
-            }
-        ),
+    last_error = None
+    for attempt in range(1, 4):
+        try:
+            result = cluster.query(
+                query,
+                QueryOptions(
+                    named_parameters={
+                        "status": "pending",
+                        "limit": limit,
+                    },
+                    timeout=timedelta(seconds=20),
+                ),
+            )
+            return [str(row["runId"]) for row in result.rows() if row.get("runId")]
+        except Exception as error:
+            last_error = error
+            message = str(error)
+            is_timeout = "timeout" in message.lower()
+            if not is_timeout or attempt == 3:
+                raise
+            time.sleep(min(0.5 * attempt, 2.0))
+
+    if last_error is not None:
+        raise last_error
+    return []
+
+
+def _is_transient_query_timeout(error: Exception) -> bool:
+    message = str(error).lower()
+    timeout_markers = (
+        "ambiguoustimeoutexception",
+        "unambiguoustimeoutexception",
+        "timeout",
+        "timed out",
     )
-    return [str(row["runId"]) for row in result.rows() if row.get("runId")]
+    return any(marker in message for marker in timeout_markers)
+
+
+def fetch_pending_run_ids_with_retry(
+    cluster,
+    limit: int,
+    *,
+    max_attempts: int = 4,
+    query_timeout_seconds: float = 8.0,
+) -> list[str]:
+    """
+    Fetch pending run IDs with transient timeout retry.
+    Retries only for timeout-like errors and uses exponential backoff + jitter.
+    """
+    last_error: Exception | None = None
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            query = """
+            SELECT META(r).id AS runId
+            FROM voyageops.agent.agent_runs r
+            WHERE r.status = $status
+            ORDER BY r.createdAt ASC
+            LIMIT $limit
+            """
+            result = cluster.query(
+                query,
+                QueryOptions(
+                    named_parameters={
+                        "status": "pending",
+                        "limit": limit,
+                    },
+                    timeout=int(query_timeout_seconds * 1_000_000),
+                ),
+            )
+            return [str(row["runId"]) for row in result.rows() if row.get("runId")]
+        except Exception as error:
+            last_error = error
+            should_retry = _is_transient_query_timeout(error) and attempt < max_attempts
+            if not should_retry:
+                raise
+
+            base_backoff = min(6.0, 0.4 * (2 ** (attempt - 1)))
+            jitter = random.uniform(0.0, 0.25)
+            sleep_seconds = base_backoff + jitter
+            log(
+                "warning",
+                (
+                    f"Pending-run query timed out (attempt {attempt}/{max_attempts}). "
+                    f"Retrying in {sleep_seconds:.2f}s..."
+                ),
+            )
+            time.sleep(sleep_seconds)
+
+    if last_error is not None:
+        raise last_error
+    return []
 
 
 def main() -> None:
@@ -106,6 +190,8 @@ def main() -> None:
     poll_seconds = float(os.getenv("GUEST_RECOVERY_POLL_SECONDS", "3"))
     batch_size = int(os.getenv("GUEST_RECOVERY_POLL_BATCH_SIZE", "10"))
     max_workers = int(os.getenv("GUEST_RECOVERY_WORKER_THREADS", "3"))
+    query_timeout_seconds = float(os.getenv("GUEST_RECOVERY_QUERY_TIMEOUT_SECONDS", "8"))
+    poll_max_attempts = int(os.getenv("GUEST_RECOVERY_POLL_MAX_ATTEMPTS", "4"))
 
     settings = get_settings()
     cluster = create_cluster(settings)
@@ -113,13 +199,19 @@ def main() -> None:
     log(
         "info",
         f"Guest Recovery worker loop started (PID {os.getpid()}, poll={poll_seconds}s, "
-        f"batch={batch_size}, threads={max_workers}, bucket={settings.couchbase_bucket})",
+        f"batch={batch_size}, threads={max_workers}, bucket={settings.couchbase_bucket}, "
+        f"queryTimeout={query_timeout_seconds}s, pollAttempts={poll_max_attempts})",
     )
 
     try:
         while True:
             try:
-                run_ids = fetch_pending_run_ids(cluster, batch_size)
+                run_ids = fetch_pending_run_ids_with_retry(
+                    cluster,
+                    batch_size,
+                    max_attempts=poll_max_attempts,
+                    query_timeout_seconds=query_timeout_seconds,
+                )
             except Exception as error:
                 log("error", f"Failed to query pending runs: {error}")
                 time.sleep(poll_seconds)
