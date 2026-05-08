@@ -2011,8 +2011,10 @@ router.post('/action-proposals/:proposalId/approve', async (req, res) => {
       }
     }
 
-    // 4. Create an action_execution document
-    const executionId = `exec::${proposalId}::${Date.now()}`;
+    // 4. Create or refresh the action_execution document.
+    // Deterministic key (one execution doc per proposal) keeps re-clicks idempotent —
+    // an upsert simply refreshes approvedAt/updatedAt instead of creating duplicates.
+    const executionId = `exec::${proposalId}`;
     const executionDoc = {
       executionId,
       proposalId,
