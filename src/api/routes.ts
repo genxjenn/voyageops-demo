@@ -1240,18 +1240,12 @@ async function generateGuestRecoveryLLMResponse(params: {
       : params.verbosity === 'detailed'
         ? 'Use a detailed response with clear sections, rationale, tradeoffs, and next steps.'
         : 'Use a balanced response with concise sections and only necessary detail.',
-    'Return JSON only with this schema:',
-    '{',
-    '  "assistantResponse": "markdown string with clear, conversational guidance",',
-    '  "guidance": {',
-    '    "playbookAdjustments": [{"title":"", "rationale":"", "priority":"low|medium|high", "suggestedChange":""}],',
-    '    "policyRuleAdjustments": [{"title":"", "rationale":"", "priority":"low|medium|high", "suggestedChange":""}],',
-    '    "actionCatalogAdjustments": [{"title":"", "rationale":"", "priority":"low|medium|high", "suggestedChange":""}],',
-    '    "operationalGuidance": ["short actionable line"],',
-    '    "missingArtifacts": [{"artifactType":"playbook|action_catalog|policy_rule","title":"","rationale":"","priority":"low|medium|high","draft":{}}]',
-    '  }',
-    '}',
-    'If no adjustments are needed for a section, return an empty array.',
+    'Return valid JSON with exactly two top-level keys: "assistantResponse" and "guidance".',
+    '"assistantResponse" must contain your actual conversational markdown answer to the operator. Never use placeholder or schema-description text as the value.',
+    '"guidance" must be an object with these array fields (use empty arrays when nothing applies):',
+    '  playbookAdjustments, policyRuleAdjustments, actionCatalogAdjustments — each item has: title, rationale, priority (low|medium|high), suggestedChange.',
+    '  operationalGuidance — array of short actionable strings.',
+    '  missingArtifacts — each item has: artifactType (playbook|action_catalog|policy_rule), title, rationale, priority, draft (object).',
   ].join(' ');
 
   const userPayload = {
@@ -1321,7 +1315,15 @@ async function generateGuestRecoveryLLMResponse(params: {
     throw new Error(`Chat completion returned non-JSON content: ${error instanceof Error ? error.message : String(error)}`);
   }
 
-  const assistantResponse = String(parsed.assistantResponse ?? '').trim();
+  let assistantResponse = String(parsed.assistantResponse ?? '').trim();
+  // Strip schema placeholder text if the LLM echoed it back instead of generating real content.
+  const schemaPlaceholders = [
+    'markdown string with clear, conversational guidance',
+    'markdown string with clear conversational guidance',
+  ];
+  for (const placeholder of schemaPlaceholders) {
+    assistantResponse = assistantResponse.replace(placeholder, '').trim();
+  }
   if (!assistantResponse) {
     throw new Error('Chat completion JSON missing assistantResponse');
   }
@@ -1956,6 +1958,93 @@ router.get('/action-proposals', async (req, res) => {
       console.error(fallbackError);
       return res.status(500).json({ error: 'Failed to load action proposals' });
     }
+  }
+});
+
+// API: Approve an action proposal (updates proposal, incident status, creates execution doc)
+router.post('/action-proposals/:proposalId/approve', async (req, res) => {
+  try {
+    const proposalId = String(req.params.proposalId || '').trim();
+    if (!proposalId) {
+      return res.status(400).json({ error: 'proposalId required' });
+    }
+
+    // 1. Load the existing proposal
+    let proposalDoc: Record<string, unknown>;
+    try {
+      const doc = await db.actionProposals.get(proposalId);
+      proposalDoc = doc.content as Record<string, unknown>;
+    } catch {
+      return res.status(404).json({ error: 'Proposal not found' });
+    }
+
+    const incidentId = String(proposalDoc.incidentId || '').trim();
+    const guestId = String(proposalDoc.guestId || '').trim();
+    const actions = Array.isArray(proposalDoc.actions) ? proposalDoc.actions : [];
+    const now = new Date().toISOString();
+    const approvedBy = String(req.body?.approvedBy || 'operator').trim();
+
+    // 2. Update the proposal status to "approved"
+    await db.actionProposals.upsert(proposalId, {
+      ...proposalDoc,
+      status: 'approved',
+      approvedAt: now,
+      approvedBy,
+      updatedAt: now,
+    });
+
+    // 3. Transition the incident status to "approved"
+    if (incidentId) {
+      try {
+        await db.cluster.query(
+          `
+          UPDATE voyageops.guests.incidents AS i
+          SET i.status = "approved",
+              i.updatedAt = $now
+          WHERE META(i).id = $incidentId
+            AND LOWER(IFMISSINGORNULL(i.status, "open")) IN ["open", "reviewing", "pending"]
+          `,
+          { parameters: { incidentId, now }, timeout: 10000 },
+        );
+      } catch (error) {
+        console.warn('Incident status update failed (non-fatal):', error instanceof Error ? error.message : String(error));
+      }
+    }
+
+    // 4. Create an action_execution document
+    const executionId = `exec::${proposalId}::${Date.now()}`;
+    const executionDoc = {
+      executionId,
+      proposalId,
+      guestId,
+      incidentId,
+      status: 'approved',
+      actions: actions.map((action: any) => ({
+        actionId: String(action?.actionId || ''),
+        label: String(action?.label || ''),
+        description: action?.description ? String(action.description) : undefined,
+        estimatedValue: action?.estimatedValue,
+        status: 'approved',
+      })),
+      approvedBy,
+      approvedAt: now,
+      updatedAt: now,
+    };
+
+    await db.actionExecutions.upsert(executionId, executionDoc);
+
+    return res.json({
+      ok: true,
+      proposalId,
+      executionId,
+      incidentId,
+      guestId,
+      status: 'approved',
+      approvedAt: now,
+    });
+  } catch (error) {
+    console.error('Approve proposal failed:', error);
+    return res.status(500).json({ error: 'Failed to approve proposal' });
   }
 });
 

@@ -332,6 +332,11 @@ export const api = {
   ) => postJson<AgentQueryResponse>("/api/agent-query", { query, agentType, sessionId }),
   actionProposals: (guestId?: string, incidentId?: string) =>
     fetchJson<ActionProposal[]>("/api/action-proposals", { guestId, incidentId }),
+  approveProposal: (proposalId: string) =>
+    postJson<{ ok: boolean; proposalId: string; executionId: string; incidentId: string; guestId: string; status: string; approvedAt: string }>(
+      `/api/action-proposals/${encodeURIComponent(proposalId)}/approve`,
+      {},
+    ),
 };
 
 export function useLiveDashboardData() {

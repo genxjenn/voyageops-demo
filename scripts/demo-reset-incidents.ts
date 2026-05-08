@@ -240,6 +240,28 @@ async function upsertIncidentsFromDataFile(): Promise<number> {
   return upserted;
 }
 
+async function upsertTargetedIncidentFromDataFile(targetIncidentId: string): Promise<number> {
+  const dataPath = path.resolve(process.cwd(), 'data/voyageops.guests.incidents');
+  const raw = await readFile(dataPath, 'utf8');
+  const lines = raw
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  let upserted = 0;
+  for (const line of lines) {
+    const doc = JSON.parse(line) as Record<string, unknown>;
+    const id = String(doc.incidentId || '').trim();
+    if (id === targetIncidentId) {
+      await db.incidents.upsert(id, doc);
+      upserted += 1;
+      break; // Found it, no need to process the rest
+    }
+  }
+
+  return upserted;
+}
+
 async function resetAllIncidentsToOpen(): Promise<number> {
   const resetQuery = `
     UPDATE voyageops.guests.incidents AS i
@@ -478,18 +500,27 @@ async function main() {
   // Incidents are reset/reloaded after cleanup.
   if (incidentsExists) {
     if (isTargeted) {
-      if (args.shouldReloadIncidents) {
-        console.log('Ignoring --reload-incidents in targeted mode to avoid reloading all incidents.');
-      }
       if (args.forceRebuildEmbeddings) {
         console.log('Ignoring --rebuild-embeddings/--force-embeddings in targeted mode to avoid rebuilding all incident vectors.');
       }
 
-      const reopenedCount = await resetIncidentToOpen(String(args.targetIncidentId));
-      console.log(`Target incident reset to open: ${reopenedCount} (${args.targetIncidentId})`);
-    } else if (args.shouldReloadIncidents) {
+      // Physically delete the specific incident and reload it from the seed data file
+      try {
+        await db.incidents.remove(String(args.targetIncidentId));
+        console.log(`Physically deleted target incident: ${args.targetIncidentId}`);
+      } catch (e: any) {
+        if (e.message && !e.message.includes('document not found')) {
+          console.warn(`Could not delete incident ${args.targetIncidentId}:`, e.message);
+        }
+      }
+
+      const reloadedCount = await upsertTargetedIncidentFromDataFile(String(args.targetIncidentId));
+      console.log(`Reloaded target incident from data file: ${reloadedCount} (${args.targetIncidentId})`);
+    } else if (args.allowGlobalReset) {
+      // Physically delete ALL incidents and reload them from the seed data file
       const deletedIncidents = await purgeIncidentsCollection();
-      console.log(`Deleted incidents before reload: ${deletedIncidents}`);
+      console.log(`Physically deleted incidents before reload: ${deletedIncidents}`);
+      
       const reloaded = await upsertIncidentsFromDataFile();
       console.log(`Reloaded incidents from data/voyageops.guests.incidents: ${reloaded}`);
     } else {
@@ -499,7 +530,7 @@ async function main() {
       }
     }
 
-    if (!isTargeted) {
+    if (!isTargeted && args.allowGlobalReset) {
       const backfilled = await backfillIncidentEmbeddings(args.forceRebuildEmbeddings);
       if (backfilled > 0) {
         if (args.forceRebuildEmbeddings) {
@@ -508,9 +539,6 @@ async function main() {
           console.log(`Backfilled embeddings for ${backfilled} incident(s).`);
         }
       }
-
-      const reopenedCount = await resetAllIncidentsToOpen();
-      console.log(`Incidents reset to open: ${reopenedCount}`);
     }
   } else {
     console.log('Skipping incident reset: guests.incidents collection does not exist in this cluster.');

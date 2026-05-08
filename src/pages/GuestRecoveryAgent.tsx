@@ -1,7 +1,8 @@
 import { AgentChat } from "@/components/AgentChat";
 import { StatusBadge } from "@/components/StatusBadge";
 import { User, Crown, CreditCard, Ship, MessageSquare, Star } from "lucide-react";
-import { useQuery, useQueries } from "@tanstack/react-query";
+import { useQuery, useQueries, useQueryClient, useMutation } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { api, type AgentQueryResponse, type GuestProfile, type IncidentRecord, type ActionProposal, type PrioritizedIncident } from "@/lib/api";
 import { parseTimestamp } from "@/lib/utils";
 import { useEffect, useState } from "react";
@@ -289,6 +290,7 @@ function buildChatAdjustedProposal(
 // │     Docs: https://docs.couchbase.com/server/current/eventing/eventing-overview.html │
 // └─────────────────────────────────────────────────────────────────────────────┘
 const GuestRecoveryAgent = () => {
+  const queryClient = useQueryClient();
   const EMPTY_GUEST: GuestProfile = {
     guestId: "",
     fullName: "Unknown guest",
@@ -311,6 +313,18 @@ const GuestRecoveryAgent = () => {
   const allIncidentsQuery = useQuery({ queryKey: ["incidents", "all"], queryFn: () => api.incidents() });
   const incidentsQuery = useQuery({ queryKey: ["incidents", selectedGuestId], queryFn: () => api.incidents({ guestId: selectedGuestId }), enabled: Boolean(selectedGuestId) });
   const prioritizedIncidentsQuery = useQuery({ queryKey: ["incidents", "prioritized", "guest-recovery"], queryFn: api.prioritizedIncidents });
+
+  const approveMutation = useMutation({
+    mutationFn: (proposalId: string) => api.approveProposal(proposalId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["incidents", "prioritized", "guest-recovery"] });
+      queryClient.invalidateQueries({ queryKey: ["action-proposals"] });
+      toast.success("Action plan approved", { description: "The recovery plan has been queued for execution." });
+    },
+    onError: (error) => {
+      toast.error("Failed to approve plan", { description: error instanceof Error ? error.message : String(error) });
+    }
+  });
   const venuesQuery = useQuery({ queryKey: ["venues"], queryFn: api.venues });
 
   const allIncidents = allIncidentsQuery.data ?? [];
@@ -902,8 +916,14 @@ const GuestRecoveryAgent = () => {
                               <p className="mt-2 text-xs font-medium text-foreground">Estimated value: {formatCurrency(action.estimatedValue)}</p>
                             ) : null}
                           </div>
-                          <Button type="button" size="sm" className="shrink-0" onClick={() => undefined}>
-                            APPROVE
+                          <Button 
+                            type="button" 
+                            size="sm" 
+                            className="shrink-0" 
+                            disabled={approveMutation.isPending || proposal.status === "approved" || proposal.status === "executed"}
+                            onClick={() => approveMutation.mutate(proposal.proposalId)}
+                          >
+                            {proposal.status === "approved" || proposal.status === "executed" ? "APPROVED" : "APPROVE"}
                           </Button>
                         </div>
                       </div>
