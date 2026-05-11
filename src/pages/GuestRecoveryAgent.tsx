@@ -312,7 +312,11 @@ const GuestRecoveryAgent = () => {
   
   const allIncidentsQuery = useQuery({ queryKey: ["incidents", "all"], queryFn: () => api.incidents() });
   const incidentsQuery = useQuery({ queryKey: ["incidents", selectedGuestId], queryFn: () => api.incidents({ guestId: selectedGuestId }), enabled: Boolean(selectedGuestId) });
-  const prioritizedIncidentsQuery = useQuery({ queryKey: ["incidents", "prioritized", "guest-recovery"], queryFn: api.prioritizedIncidents });
+  const prioritizedIncidentsQuery = useQuery({
+    queryKey: ["incidents", "prioritized", "guest-recovery"],
+    queryFn: api.prioritizedIncidents,
+    refetchInterval: 10000,
+  });
 
   const approveMutation = useMutation({
     mutationFn: (proposalId: string) => api.approveProposal(proposalId),
@@ -375,7 +379,8 @@ const GuestRecoveryAgent = () => {
   }));
 
   useEffect(() => {
-    if (!selectedGuestId && topGuestIds.length > 0) {
+    if (topGuestIds.length === 0) return;
+    if (!selectedGuestId || !topGuestIds.includes(selectedGuestId)) {
       setSelectedGuestId(topGuestIds[0]);
     }
   }, [selectedGuestId, topGuestIds]);

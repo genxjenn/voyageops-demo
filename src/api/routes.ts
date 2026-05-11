@@ -1994,6 +1994,8 @@ router.post('/action-proposals/:proposalId/approve', async (req, res) => {
     });
 
     // 3. Transition the incident status to "approved"
+    // Proposal incidentId can be either META().id or the business incidentId.
+    // Resolve both forms so ranking inputs actually update after approval.
     if (incidentId) {
       try {
         await db.cluster.query(
@@ -2001,7 +2003,7 @@ router.post('/action-proposals/:proposalId/approve', async (req, res) => {
           UPDATE voyageops.guests.incidents AS i
           SET i.status = "approved",
               i.updatedAt = $now
-          WHERE META(i).id = $incidentId
+          WHERE (META(i).id = $incidentId OR i.incidentId = $incidentId)
             AND LOWER(IFMISSINGORNULL(i.status, "open")) IN ["open", "reviewing", "pending"]
           `,
           { parameters: { incidentId, now }, timeout: 10000 },

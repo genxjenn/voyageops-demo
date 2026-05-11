@@ -8,7 +8,6 @@ const OPENAI_EMBEDDING_MODEL = process.env.OPENAI_EMBEDDING_MODEL || 'text-embed
 
 type ResetArgs = {
   shouldRequeue: boolean;
-  shouldReloadIncidents: boolean;
   forceRebuildEmbeddings: boolean;
   targetIncidentId?: string;
   shouldShowHelp: boolean;
@@ -36,7 +35,6 @@ function parseArgs(argv: string[]): ResetArgs {
   const targetIncidentId = getArgValue(argv, '--incidentId') ?? getArgValue(argv, '--incident-id');
   return {
     shouldRequeue: argv.includes('--requeue'),
-    shouldReloadIncidents: argv.includes('--reload-incidents'),
     forceRebuildEmbeddings: argv.includes('--rebuild-embeddings') || argv.includes('--force-embeddings'),
     targetIncidentId,
     shouldShowHelp: argv.includes('--help') || argv.includes('-h'),
@@ -45,7 +43,7 @@ function parseArgs(argv: string[]): ResetArgs {
 }
 
 function printUsage(): void {
-  console.log('Usage: npm run demo:reset-incidents -- [--incidentId <id>] [--requeue] [--all] [--reload-incidents] [--rebuild-embeddings]');
+  console.log('Usage: npm run demo:reset-incidents -- [--incidentId <id>] [--requeue] [--all] [--rebuild-embeddings]');
   console.log('');
   console.log('Examples:');
   console.log('  Targeted reset + requeue one incident:');

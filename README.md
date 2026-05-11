@@ -93,10 +93,10 @@ Then run the seed scripts:
 
 ```sh
 # Seed guest data
-npm tsx scripts/load-guests-backup.ts
+npx tsx scripts/load-guests-backup.ts
 
 # Seed booking data
-npm tsx scripts/load-bookings-backup.ts
+npx tsx scripts/load-bookings-backup.ts
 
 # Seed action catalog (generates OpenAI embeddings — takes ~2 min)
 npx tsx scripts/seed-action-catalog.ts
@@ -123,22 +123,23 @@ npx tsx scripts/demo-reset-incidents.ts --requeue
 
 ```
 
-### 4. Set up Couchbase vector search indexes for Guest Recovery Agent
+### 4. Create vector indexes for Guest Recovery Agent
 
-```sh
-.venv/bin/python backend/python/guest_recovery/setup_search_index.py
-```
+Run the SQL in `database/create.vector.indexes.sql` from Query Workbench.
+This includes the `playbooks.embedding` vector index used by Guest Recovery.
 
-## Update .env with vector index names 
+## Update .env with vector index names
 CB_PLAYBOOK_VECTOR_INDEX=voAgentPlaybookOpenAI_vectorIndex
 CB_VECTOR_INDEX_CATEGORY=voGuestIncident_vector_category_incidents
 CB_VECTOR_INDEX_TYPE=voGuestIncident_vector_type_incidents
 CB_VECTOR_INDEX_DESC=voGuestIncident_vector_desc_incidents
 
 
-### 5. Create and deploy the Eventing function
+### 5. Create and deploy Eventing functions
 
-The Guest Recovery flow depends on Capella Eventing to create `agent_runs` documents when incidents are `open`.
+The Guest Recovery flow uses two Capella Eventing handlers:
+- `incidentTimestamps` to maintain incident timestamp fields.
+- `guest_recovery_trigger` to create `agent_runs` documents when incidents are `open`.
 
 1. Create Eventing metadata scope/collection in Query Workbench:
 
@@ -148,14 +149,25 @@ CREATE SCOPE voyageops.eventing;
 CREATE COLLECTION voyageops.eventing.sysdata;
 ```
 
-2. In Capella, open **Eventing** and create a new function:
+2. In Capella, open **Eventing** and create function `incidentTimestamps` first:
+
+- Function name: `incidentTimestamps`
+- Source collection: `voyageops.guests.incidents`
+- Metadata collection: `voyageops.eventing.sysdata`
+- Language: JavaScript
+
+3. Paste the handler code from `database/eventing.incidentTimestamps.js`.
+
+4. Deploy and resume `incidentTimestamps`.
+
+5. Create function `guest_recovery_trigger`:
 
 - Function name: `guest_recovery_trigger`
 - Source collection: `voyageops.guests.incidents`
 - Metadata collection: `voyageops.eventing.sysdata`
 - Language: JavaScript
 
-3. Add bucket binding:
+6. Add bucket binding:
 
 - Alias: `dst`
 - Collection: `voyageops.agent.agent_runs`
@@ -165,11 +177,11 @@ CREATE COLLECTION voyageops.eventing.sysdata;
 - Collection: `voyageops.guests.incidents`
 - Access: Read
 
-4. Paste the handler code from `database/eventing.guestIncidentTrigger.js`.
+7. Paste the handler code from `database/eventing.guestIncidentTrigger.js`.
 
-5. Deploy and resume the function.
+8. Deploy and resume `guest_recovery_trigger`.
 
-6. Validate with a quick query:
+9. Validate with a quick query:
 
 ```sql
 SELECT status, COUNT(1) AS count
