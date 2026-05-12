@@ -2271,9 +2271,76 @@ router.post('/agent-query', async (req, res) => {
     }
 
     failurePhase = 'load-policy-action-playbook-context';
-    const policyRules = await loadPolicyRulesForContext(primaryIncident);
-    const allowedActions = await loadAllowedActionsForContext(primaryIncident, primaryGuest);
-    const playbookIds = await loadPlaybookIdsForContext(primaryIncident, primaryGuest);
+    const [policyRules, allowedActions, playbookIds] = await Promise.all([
+      loadPolicyRulesForContext(primaryIncident),
+      loadAllowedActionsForContext(primaryIncident, primaryGuest),
+      loadPlaybookIdsForContext(primaryIncident, primaryGuest),
+    ]);
+
+    const incidentType = String(primaryIncident?.type || '').trim().toLowerCase();
+    const incidentCategory = String(primaryIncident?.category || '').trim().toLowerCase();
+    const incidentSeverity = String(primaryIncident?.severity || '').trim().toLowerCase();
+    const guestTier = String(primaryGuest?.loyaltyTier || '').trim().toLowerCase();
+
+    const matchedRetrievalContextPromise = (async (): Promise<{
+      matchedPlaybooks: any[];
+      matchedPolicyRules: any[];
+      matchedActionCatalog: any[];
+    }> => {
+      if (!primaryIncident) {
+        return { matchedPlaybooks: [], matchedPolicyRules: [], matchedActionCatalog: [] };
+      }
+      const [playbooksResult, policyRulesResult, actionCatalogResult] = await Promise.all([
+        db.cluster.query(
+          `
+          SELECT META(p).id AS playbookId, p.title, p.incidentType, p.severity, p.loyaltyTier, p.actionIds
+          FROM voyageops.agent.playbooks p
+          WHERE p.active = true
+            AND LOWER(REPLACE(REPLACE(TRIM(p.incidentType), " ", "-"), "_", "-")) = $incidentType
+            AND (
+              (IS_STRING(p.severity) AND LOWER(TRIM(p.severity)) = $severity)
+              OR (IS_ARRAY(p.severity) AND ANY sev IN p.severity SATISFIES LOWER(TRIM(sev)) = $severity END)
+            )
+          ORDER BY p.updatedAt DESC
+          LIMIT 6
+          `,
+          { parameters: { incidentType, severity: incidentSeverity }, timeout: 10000 },
+        ),
+        db.cluster.query(
+          `
+          SELECT META(r).id AS ruleDocId, r.ruleId, r.name, r.description, r.priority, r.constraints, r.incidentType, r.severity
+          FROM voyageops.agent.policy_rules r
+          WHERE r.enabled = true
+            AND (r.incidentType IS MISSING OR LOWER(TRIM(r.incidentType)) = $incidentType)
+            AND (r.severity IS MISSING OR LOWER(TRIM(r.severity)) = $severity)
+          ORDER BY r.priority DESC
+          LIMIT 10
+          `,
+          { parameters: { incidentType, severity: incidentSeverity }, timeout: 10000 },
+        ),
+        db.cluster.query(
+          `
+          SELECT a.actionId, a.label, a.description, a.estimatedValue, a.incidentType, a.incidentCategory, a.loyaltyTier
+          FROM voyageops.agent.action_catalog a
+          WHERE a.active = true
+            AND LOWER(TRIM(a.incidentType)) = $incidentType
+            AND LOWER(TRIM(a.incidentCategory)) = $incidentCategory
+            AND (
+              (IS_STRING(a.loyaltyTier) AND LOWER(TRIM(a.loyaltyTier)) IN ["any", $loyaltyTier])
+              OR (IS_ARRAY(a.loyaltyTier) AND ANY tier IN a.loyaltyTier SATISFIES LOWER(TRIM(tier)) IN ["any", $loyaltyTier] END)
+            )
+          ORDER BY a.estimatedValue DESC
+          LIMIT 12
+          `,
+          { parameters: { incidentType, incidentCategory, loyaltyTier: guestTier || 'any' }, timeout: 10000 },
+        ),
+      ]);
+      return {
+        matchedPlaybooks: playbooksResult.rows,
+        matchedPolicyRules: policyRulesResult.rows,
+        matchedActionCatalog: actionCatalogResult.rows,
+      };
+    })();
 
     failurePhase = 'llm-plan-adjustment';
     const hasDefinedActions = allowedActions.length > 0;
@@ -2321,66 +2388,7 @@ router.post('/agent-query', async (req, res) => {
       responseCitations = [incidentCitation, guestCitation].filter(Boolean);
     }
 
-    const incidentType = String(primaryIncident?.type || '').trim().toLowerCase();
-    const incidentCategory = String(primaryIncident?.category || '').trim().toLowerCase();
-    const incidentSeverity = String(primaryIncident?.severity || '').trim().toLowerCase();
-    const guestTier = String(primaryGuest?.loyaltyTier || '').trim().toLowerCase();
-
-    let matchedPlaybooks: any[] = [];
-    let matchedPolicyRules: any[] = [];
-    let matchedActionCatalog: any[] = [];
-
-    if (primaryIncident) {
-      const [playbooksResult, policyRulesResult, actionCatalogResult] = await Promise.all([
-        db.cluster.query(
-          `
-          SELECT META(p).id AS playbookId, p.title, p.incidentType, p.severity, p.loyaltyTier, p.actionIds
-          FROM voyageops.agent.playbooks p
-          WHERE p.active = true
-            AND LOWER(REPLACE(REPLACE(TRIM(p.incidentType), " ", "-"), "_", "-")) = $incidentType
-            AND (
-              (IS_STRING(p.severity) AND LOWER(TRIM(p.severity)) = $severity)
-              OR (IS_ARRAY(p.severity) AND ANY sev IN p.severity SATISFIES LOWER(TRIM(sev)) = $severity END)
-            )
-          ORDER BY p.updatedAt DESC
-          LIMIT 6
-          `,
-          { parameters: { incidentType, severity: incidentSeverity }, timeout: 10000 },
-        ),
-        db.cluster.query(
-          `
-          SELECT META(r).id AS ruleDocId, r.ruleId, r.name, r.description, r.priority, r.constraints, r.incidentType, r.severity
-          FROM voyageops.agent.policy_rules r
-          WHERE r.enabled = true
-            AND (r.incidentType IS MISSING OR LOWER(TRIM(r.incidentType)) = $incidentType)
-            AND (r.severity IS MISSING OR LOWER(TRIM(r.severity)) = $severity)
-          ORDER BY r.priority DESC
-          LIMIT 10
-          `,
-          { parameters: { incidentType, severity: incidentSeverity }, timeout: 10000 },
-        ),
-        db.cluster.query(
-          `
-          SELECT a.actionId, a.label, a.description, a.estimatedValue, a.incidentType, a.incidentCategory, a.loyaltyTier
-          FROM voyageops.agent.action_catalog a
-          WHERE a.active = true
-            AND LOWER(TRIM(a.incidentType)) = $incidentType
-            AND LOWER(TRIM(a.incidentCategory)) = $incidentCategory
-            AND (
-              (IS_STRING(a.loyaltyTier) AND LOWER(TRIM(a.loyaltyTier)) IN ["any", $loyaltyTier])
-              OR (IS_ARRAY(a.loyaltyTier) AND ANY tier IN a.loyaltyTier SATISFIES LOWER(TRIM(tier)) IN ["any", $loyaltyTier] END)
-            )
-          ORDER BY a.estimatedValue DESC
-          LIMIT 12
-          `,
-          { parameters: { incidentType, incidentCategory, loyaltyTier: guestTier || 'any' }, timeout: 10000 },
-        ),
-      ]);
-
-      matchedPlaybooks = playbooksResult.rows;
-      matchedPolicyRules = policyRulesResult.rows;
-      matchedActionCatalog = actionCatalogResult.rows;
-    }
+    const { matchedPlaybooks, matchedPolicyRules, matchedActionCatalog } = await matchedRetrievalContextPromise;
 
     let finalResponse = response;
     let guidance: GuidanceBundle = {

@@ -53,35 +53,3 @@ CREATE INDEX ix_agent_runs_pending_createdAt
 ON voyageops.agent.agent_runs(createdAt)
 WHERE status = "pending";
 
-
--- ============================================================================
--- 4) Vector Indexes (SQL++ Vector Index / GSI style)
---    Field names assumed:
---    - action_catalog.embedding
---    - playbooks.embedding
---    - outcomes.embedding
--- ============================================================================
-
-CREATE VECTOR INDEX voAgent_vector_action_catalog_embedding
-ON voyageops.agent.action_catalog(embedding VECTOR)
-WITH {
-  "dimension": 1536,
-  "similarity": "L2",
-  "description": "IVF,SQ8"
-};
-
-CREATE VECTOR INDEX voAgent_vector_playbooks_embedding
-ON voyageops.agent.playbooks(embedding VECTOR)
-WITH {
-  "dimension": 1536,
-  "similarity": "L2",
-  "description": "IVF,SQ8"
-};
-
-CREATE VECTOR INDEX voAgent_vector_outcomes_embedding
-ON voyageops.agent.outcomes(embedding VECTOR)
-WITH {
-  "dimension": 1536,
-  "similarity": "L2",
-  "description": "IVF,SQ8"
-};
