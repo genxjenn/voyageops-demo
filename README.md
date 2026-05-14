@@ -211,6 +211,8 @@ npm run dev
 
 The app is then available at **http://localhost:5173**.
 
+On **Guest Recovery**, the center column (Top-10 guest queue) and the right column (chat-focused incident) can both list the same worker proposal when the selected guest’s open incident matches the incident you are viewing in chat. Each column uses the same approval control; approving either updates the same Couchbase proposal document.
+
 ### Terminal 3 — (When ready) Python worker
 
 ```sh
@@ -259,8 +261,8 @@ Then start the worker (`npm run demo:worker`) to begin processing.
 | `npx tsx scripts/seed-agent-data.ts` | Seed playbooks and policy rules |
 | `npx tsx scripts/seed-intelligence-data.ts` | Seed recommendations, timeline, KPIs, ship info |
 | `npx tsx scripts/seed-excursions-data.ts` | Seed excursions and guest/booking data |
-
----
+| `npm run demo:load-incidents-for-recovery -- --file data/my-incidents.ndjson` | Load specific 
+|     incident doc contained in file data/my-incidents.ndjson
 
 ## Architecture
 

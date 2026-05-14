@@ -316,6 +316,129 @@ function buildChatAdjustedProposal(
   };
 }
 
+type ApproveProposalMutationInput = {
+  proposalId: string;
+  chatPreviewOverlay?: Pick<ActionProposal, "actions" | "summary" | "reasoning" | "priority" | "interactive">;
+};
+
+interface RecoveryProposalCardProps {
+  proposal: ActionProposal;
+  approveMutation: {
+    mutate: (input: ApproveProposalMutationInput) => void;
+    isPending: boolean;
+  };
+  showAlternatesForProposalCard: (proposal: ActionProposal) => boolean;
+}
+
+function RecoveryProposalCard({
+  proposal,
+  approveMutation,
+  showAlternatesForProposalCard,
+}: RecoveryProposalCardProps) {
+  return (
+    <div className="rounded-lg border border-border bg-card p-4 shadow-sm">
+      <div className="flex items-start justify-between gap-2 mb-3">
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            {proposal.proposalId.includes("::chat-preview") ? "Chat-Adjusted Preview" : "Agent Proposal"}
+          </p>
+          <p className="mt-1 text-[11px] font-mono text-muted-foreground">Incident: {proposal.incidentId}</p>
+          <p className="mt-1 text-sm font-medium text-foreground leading-snug">{proposal.summary ?? "Recovery plan ready for review"}</p>
+        </div>
+        <StatusBadge status={toBadgeStatus(proposal.status)} />
+      </div>
+
+      {proposal.reasoning && (
+        <p className="text-xs text-muted-foreground leading-relaxed mb-3 border-l-2 border-primary/30 pl-2">{proposal.reasoning}</p>
+      )}
+
+      <div className="space-y-2">
+        {proposal.actions.map((action, index) => (
+          <div key={action.actionId} className="rounded-lg border border-border bg-muted/30 p-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Action {index + 1}</p>
+                <p className="mt-1 text-sm font-medium text-foreground">{action.label}</p>
+                {action.description && (
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{action.description}</p>
+                )}
+                {action.estimatedValue ? (
+                  <p className="mt-2 text-xs font-medium text-foreground">Estimated value: {formatCurrency(action.estimatedValue)}</p>
+                ) : null}
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                className="shrink-0"
+                disabled={approveMutation.isPending || proposal.status === "approved" || proposal.status === "executed"}
+                onClick={() => {
+                  const id = proposal.proposalId;
+                  if (id.includes("::chat-preview")) {
+                    approveMutation.mutate({
+                      proposalId: id,
+                      chatPreviewOverlay: {
+                        actions: proposal.actions,
+                        summary: proposal.summary,
+                        reasoning: proposal.reasoning,
+                        priority: proposal.priority,
+                        interactive: proposal.interactive,
+                      },
+                    });
+                  } else {
+                    approveMutation.mutate({ proposalId: id });
+                  }
+                }}
+              >
+                {proposal.status === "approved" || proposal.status === "executed" ? "APPROVED" : "APPROVE"}
+              </Button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {showAlternatesForProposalCard(proposal) && (
+        <Collapsible defaultOpen={false} className="mt-3 pt-3 border-t border-border">
+          <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 text-left hover:bg-muted/30 rounded-md py-1.5 -mx-1 px-1">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Worker alternate actions ({(proposal.interactive?.alternativeActions ?? []).length})
+            </p>
+            <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <ul className="mt-2 space-y-2">
+              {(proposal.interactive?.alternativeActions ?? []).map((alt) => (
+                <li
+                  key={alt.actionId}
+                  className="rounded-lg border border-dashed border-border/60 bg-muted/15 p-2 text-[11px] text-muted-foreground leading-relaxed"
+                >
+                  <span className="font-medium text-foreground">{alt.label}</span>
+                  {alt.description ? <span className="block mt-0.5">{alt.description}</span> : null}
+                  {typeof alt.estimatedValue === "number" && !Number.isNaN(alt.estimatedValue) ? (
+                    <span className="block mt-1 text-foreground font-medium">
+                      Estimated value: {formatCurrency(alt.estimatedValue)}
+                    </span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          </CollapsibleContent>
+        </Collapsible>
+      )}
+
+      {proposal.interactive?.followUpQuestions && proposal.interactive.followUpQuestions.length > 0 && (
+        <div className="mt-3 pt-3 border-t border-border">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Follow-up Questions</p>
+          <ul className="space-y-1">
+            {proposal.interactive.followUpQuestions.map((q, i) => (
+              <li key={i} className="text-xs text-muted-foreground leading-relaxed">• {q}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ┌─────────────────────────────────────────────────────────────────────────────┐
 // │ COUCHBASE INTEGRATION: Guest Recovery Agent Data                           │
 // │                                                                             │
@@ -518,6 +641,13 @@ const GuestRecoveryAgent = () => {
     showWorkerAlternatesUi &&
     (proposal.interactive?.alternativeActions?.length ?? 0) > 0 &&
     alternatesScopeIncidentIds.has(normalizeIncidentIdForAlternatesScope(proposal.incidentId));
+  const showChatIncidentProposalPreview =
+    Boolean(
+      adjustedProposalPreview &&
+      selectedChatIncidentId &&
+      normalizeIncidentIdForAlternatesScope(adjustedProposalPreview.incidentId) ===
+        normalizeIncidentIdForAlternatesScope(selectedChatIncidentId),
+    );
   const severityOrder = ["critical", "high", "medium", "low", "unknown"] as const;
   const proposalsBySeverity = severityOrder
     .map((severity) => ({
@@ -768,6 +898,56 @@ const GuestRecoveryAgent = () => {
                   <p className="text-sm text-muted-foreground">No incidents found for this guest.</p>
                 )}
               </div>
+
+              <div className="space-y-4">
+                <h2 className="text-sm font-semibold text-foreground">Recovery Plan Approval Queue (Top-10)</h2>
+
+                {adjustedProposalPreview && lastAdjustmentPrompt && (
+                  <div className="rounded-md border border-warning/20 bg-warning/5 p-2.5">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-warning">Chat-adjusted demo preview</p>
+                    <p className="mt-1.5 text-xs text-muted-foreground leading-relaxed">
+                      Latest prompt: <strong className="text-foreground">{lastAdjustmentPrompt}</strong>
+                    </p>
+                    <p className="mt-1.5 text-xs text-muted-foreground leading-relaxed">
+                      Approving a chat-adjusted card updates the underlying Couchbase proposal with the previewed actions and marks it approved for execution.
+                    </p>
+                  </div>
+                )}
+
+                {proposalsQuery.isLoading && (
+                  <div className="rounded-lg border border-border bg-card p-4">
+                    <p className="text-xs text-muted-foreground">Loading proposals…</p>
+                  </div>
+                )}
+
+                {!proposalsQuery.isLoading && visibleProposals.length === 0 && (
+                  <div className="rounded-lg border border-border bg-card p-4">
+                    <p className="text-xs text-muted-foreground leading-relaxed">
+                      No agent proposals have been generated for this guest's open incidents yet. The worker creates one proposal per pending run (incident) once processed.
+                    </p>
+                  </div>
+                )}
+
+                {proposalsBySeverity.map(({ severity, proposals }) => (
+                  <div key={severity} className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <StatusBadge status={toBadgeStatus(severity, "low")} />
+                      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                        {severity} severity incidents ({proposals.length})
+                      </p>
+                    </div>
+
+                    {proposals.map((proposal: ActionProposal) => (
+                      <RecoveryProposalCard
+                        key={proposal.proposalId}
+                        proposal={proposal}
+                        approveMutation={approveMutation}
+                        showAlternatesForProposalCard={showAlternatesForProposalCard}
+                      />
+                    ))}
+                  </div>
+                ))}
+              </div>
             </TabsContent>
 
             <TabsContent value="context" className="space-y-4">
@@ -831,7 +1011,7 @@ const GuestRecoveryAgent = () => {
           </Tabs>
         </div>
 
-        {/* Right column — chat focus & plan + approval queue */}
+        {/* Right column — chat-focused incident: selector, LLM plan, full proposal cards for viewed incident */}
         <div className="space-y-4">
           <div className="space-y-2">
             <h2 className="text-sm font-semibold text-foreground">Chat focus and plan</h2>
@@ -922,176 +1102,41 @@ const GuestRecoveryAgent = () => {
                         Ask chat about this incident to show the LLM-generated plan here.
                       </p>
                     )}
-                    {focusedProposal && (
-                      <div className="mt-3 border-t border-border pt-3">
-                        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                          Playbook and Actions Available to Agent
-                        </p>
-                        <p className="mt-1 text-sm font-medium text-foreground">
-                          {focusedProposal.summary ?? "Recovery plan ready for review"}
-                        </p>
-                        {focusedProposal.actions.length > 0 ? (
-                          <div className="mt-2 space-y-1.5">
-                            {focusedProposal.actions.map((action) => (
-                              <p key={action.actionId} className="text-xs text-muted-foreground leading-relaxed">
-                                • <span className="text-foreground font-medium">{action.label}</span>
-                                {action.estimatedValue ? ` (${formatCurrency(action.estimatedValue)})` : ""}
-                              </p>
-                            ))}
-                          </div>
-                        ) : (
-                          <p className="mt-2 text-xs text-muted-foreground">
-                            No concrete action selected yet.
+                    <div className="mt-4 space-y-4 border-t border-border pt-4">
+                      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                        Action proposal (viewed incident)
+                      </p>
+                      {chatFocusedProposalQuery.isLoading && (
+                        <p className="text-xs text-muted-foreground">Loading worker proposal…</p>
+                      )}
+                      {!chatFocusedProposalQuery.isLoading &&
+                        !showChatIncidentProposalPreview &&
+                        !focusedProposal && (
+                          <p className="text-xs text-muted-foreground leading-relaxed">
+                            No worker proposal for this incident yet. The worker creates one proposal per incident once processed.
                           </p>
                         )}
-                      </div>
-                    )}
+                      {showChatIncidentProposalPreview && adjustedProposalPreview && (
+                        <RecoveryProposalCard
+                          proposal={adjustedProposalPreview}
+                          approveMutation={approveMutation}
+                          showAlternatesForProposalCard={showAlternatesForProposalCard}
+                        />
+                      )}
+                      {focusedProposal && (
+                        <RecoveryProposalCard
+                          proposal={focusedProposal}
+                          approveMutation={approveMutation}
+                          showAlternatesForProposalCard={showAlternatesForProposalCard}
+                        />
+                      )}
+                    </div>
                   </>
               ) : (
                 <p className="text-xs text-muted-foreground">Loading incident context…</p>
               )}
             </div>
           </div>
-
-          <h2 className="text-sm font-semibold text-foreground">Recovery Plan Approval Queue (Top-10)</h2>
-
-          {adjustedProposalPreview && lastAdjustmentPrompt && (
-            <div className="rounded-md border border-warning/20 bg-warning/5 p-2.5">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-warning">Chat-adjusted demo preview</p>
-              <p className="mt-1.5 text-xs text-muted-foreground leading-relaxed">
-                Latest prompt: <strong className="text-foreground">{lastAdjustmentPrompt}</strong>
-              </p>
-              <p className="mt-1.5 text-xs text-muted-foreground leading-relaxed">
-                Approving a chat-adjusted card updates the underlying Couchbase proposal with the previewed actions and marks it approved for execution.
-              </p>
-            </div>
-          )}
-
-          {proposalsQuery.isLoading && (
-            <div className="rounded-lg border border-border bg-card p-4">
-              <p className="text-xs text-muted-foreground">Loading proposals…</p>
-            </div>
-          )}
-
-          {!proposalsQuery.isLoading && visibleProposals.length === 0 && (
-            <div className="rounded-lg border border-border bg-card p-4">
-              <p className="text-xs text-muted-foreground leading-relaxed">
-                No agent proposals have been generated for this guest's open incidents yet. The worker creates one proposal per pending run (incident) once processed.
-              </p>
-            </div>
-          )}
-
-          {proposalsBySeverity.map(({ severity, proposals }) => (
-            <div key={severity} className="space-y-3">
-              <div className="flex items-center gap-2">
-                <StatusBadge status={toBadgeStatus(severity, "low")} />
-                <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  {severity} severity incidents ({proposals.length})
-                </p>
-              </div>
-
-              {proposals.map((proposal: ActionProposal) => (
-                <div key={proposal.proposalId} className="rounded-lg border border-border bg-card p-4 shadow-sm">
-                  <div className="flex items-start justify-between gap-2 mb-3">
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{proposal.proposalId.includes("::chat-preview") ? "Chat-Adjusted Preview" : "Agent Proposal"}</p>
-                      <p className="mt-1 text-[11px] font-mono text-muted-foreground">Incident: {proposal.incidentId}</p>
-                      <p className="mt-1 text-sm font-medium text-foreground leading-snug">{proposal.summary ?? "Recovery plan ready for review"}</p>
-                    </div>
-                    <StatusBadge status={toBadgeStatus(proposal.status)} />
-                  </div>
-
-                  {proposal.reasoning && (
-                    <p className="text-xs text-muted-foreground leading-relaxed mb-3 border-l-2 border-primary/30 pl-2">{proposal.reasoning}</p>
-                  )}
-
-                  <div className="space-y-2">
-                    {proposal.actions.map((action, index) => (
-                      <div key={action.actionId} className="rounded-lg border border-border bg-muted/30 p-3">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0 flex-1">
-                            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Action {index + 1}</p>
-                            <p className="mt-1 text-sm font-medium text-foreground">{action.label}</p>
-                            {action.description && (
-                              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{action.description}</p>
-                            )}
-                            {action.estimatedValue ? (
-                              <p className="mt-2 text-xs font-medium text-foreground">Estimated value: {formatCurrency(action.estimatedValue)}</p>
-                            ) : null}
-                          </div>
-                          <Button 
-                            type="button" 
-                            size="sm" 
-                            className="shrink-0" 
-                            disabled={approveMutation.isPending || proposal.status === "approved" || proposal.status === "executed"}
-                            onClick={() => {
-                              const id = proposal.proposalId;
-                              if (id.includes("::chat-preview")) {
-                                approveMutation.mutate({
-                                  proposalId: id,
-                                  chatPreviewOverlay: {
-                                    actions: proposal.actions,
-                                    summary: proposal.summary,
-                                    reasoning: proposal.reasoning,
-                                    priority: proposal.priority,
-                                    interactive: proposal.interactive,
-                                  },
-                                });
-                              } else {
-                                approveMutation.mutate({ proposalId: id });
-                              }
-                            }}
-                          >
-                            {proposal.status === "approved" || proposal.status === "executed" ? "APPROVED" : "APPROVE"}
-                          </Button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  {showAlternatesForProposalCard(proposal) && (
-                    <Collapsible defaultOpen={false} className="mt-3 pt-3 border-t border-border">
-                      <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 text-left hover:bg-muted/30 rounded-md py-1.5 -mx-1 px-1">
-                        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                          Worker alternate actions ({(proposal.interactive?.alternativeActions ?? []).length})
-                        </p>
-                        <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
-                      </CollapsibleTrigger>
-                      <CollapsibleContent>
-                        <ul className="mt-2 space-y-2">
-                          {(proposal.interactive?.alternativeActions ?? []).map((alt) => (
-                            <li
-                              key={alt.actionId}
-                              className="rounded-lg border border-dashed border-border/60 bg-muted/15 p-2 text-[11px] text-muted-foreground leading-relaxed"
-                            >
-                              <span className="font-medium text-foreground">{alt.label}</span>
-                              {alt.description ? <span className="block mt-0.5">{alt.description}</span> : null}
-                              {typeof alt.estimatedValue === "number" && !Number.isNaN(alt.estimatedValue) ? (
-                                <span className="block mt-1 text-foreground font-medium">
-                                  Estimated value: {formatCurrency(alt.estimatedValue)}
-                                </span>
-                              ) : null}
-                            </li>
-                          ))}
-                        </ul>
-                      </CollapsibleContent>
-                    </Collapsible>
-                  )}
-
-                  {proposal.interactive?.followUpQuestions && proposal.interactive.followUpQuestions.length > 0 && (
-                    <div className="mt-3 pt-3 border-t border-border">
-                      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Follow-up Questions</p>
-                      <ul className="space-y-1">
-                        {proposal.interactive.followUpQuestions.map((q, i) => (
-                          <li key={i} className="text-xs text-muted-foreground leading-relaxed">• {q}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          ))}
 
         </div>
       </div>
