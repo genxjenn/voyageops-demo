@@ -29,6 +29,12 @@ import { useLiveDashboardData } from "@/lib/api";
 // │ Both: Consider caching KPIs in a dedicated collection with TTL             │
 // │ for sub-second dashboard loads                                              │
 // └─────────────────────────────────────────────────────────────────────────────┘
+
+function dashboardIncidentHeadingId(inc: { id: string; incidentId?: string }) {
+  const fromApi = inc.incidentId?.trim();
+  return fromApi || inc.id;
+}
+
 const Dashboard = () => {
   const { kpisQuery, shipInfoQuery, incidentsQuery, excursionsQuery, venuesQuery, recommendationsQuery } = useLiveDashboardData();
 
@@ -122,19 +128,23 @@ const Dashboard = () => {
             <AlertTriangle className="h-4 w-4 text-destructive" /> Active Incidents ({activeIncidents.length})
           </h2>
           <div className="space-y-2">
-            {activeIncidents.map((inc) => (
-              <div key={inc.id} className="rounded-lg border border-border bg-card p-3 flex items-center justify-between gap-3">
+            {activeIncidents.map((inc) => {
+              const headingId = dashboardIncidentHeadingId(inc);
+              return (
+              <div key={headingId} className="rounded-lg border border-border bg-card p-3 flex items-center justify-between gap-3">
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <span className="text-xs font-mono text-muted-foreground">{inc.id}</span>
                     <StatusBadge status={inc.severity} />
                     <StatusBadge status={inc.status} />
                   </div>
-                  <p className="mt-1 text-sm text-foreground truncate">{inc.type}: {inc.category}</p>
+                  <p className="mt-1 text-sm text-foreground truncate">
+                    {inc.type}: {inc.category}: {headingId}
+                  </p>
                   <p className="text-xs text-muted-foreground truncate">{inc.description}</p>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 

@@ -1,13 +1,15 @@
 import { AgentChat } from "@/components/AgentChat";
 import { StatusBadge } from "@/components/StatusBadge";
-import { User, Crown, CreditCard, Ship, MessageSquare, Star } from "lucide-react";
+import { User, Crown, CreditCard, Ship, MessageSquare, Star, ChevronDown } from "lucide-react";
 import { useQuery, useQueries, useQueryClient, useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { api, type AgentQueryResponse, type GuestProfile, type IncidentRecord, type ActionProposal, type PrioritizedIncident } from "@/lib/api";
+import { api, type AgentQueryResponse, type GuestProfile, type IncidentRecord, type ActionProposal, type ActionProposalAction, type PrioritizedIncident } from "@/lib/api";
 import { parseTimestamp } from "@/lib/utils";
 import { useEffect, useState } from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import ReactMarkdown from "react-markdown";
 
 function getGuestDisplayName(guest: GuestProfile | undefined) {
@@ -46,6 +48,14 @@ function getIncidentIdentifier(incident: IncidentRecord | undefined) {
   return incident?.incidentId ?? incident?.id ?? "Unknown incident";
 }
 
+function normalizeIncidentIdForAlternatesScope(id: string | undefined) {
+  if (!id) return "";
+  let u = String(id).trim().toUpperCase();
+  const scopeSep = u.indexOf("::");
+  if (scopeSep >= 0) u = u.slice(0, scopeSep);
+  return u;
+}
+
 function extractIncidentIdsFromCommand(command: string): string[] {
   const normalized = command.replace(/[\u2010-\u2015\u2212]/g, "-");
   const matches = normalized.match(/\bINS?_[A-Z0-9-]+_[A-Z0-9-]+(?:::[A-Za-z0-9_-]+)?\b/gi) ?? [];
@@ -55,6 +65,15 @@ function extractIncidentIdsFromCommand(command: string): string[] {
       return trimmed.startsWith("INS_") ? `IN_${trimmed.slice(4)}` : trimmed;
     })
     .filter(Boolean);
+}
+
+/** True when operator chat suggests interest in alternates, cost tradeoffs, or comparable plans. */
+function operatorRequestedWorkerAlternatesUi(command: string | null): boolean {
+  if (!command || !String(command).trim()) return false;
+  const n = command.toLowerCase();
+  return /(alternative|alternatives|cheaper|lower\s*cost|budget|option|options|trade\s*off|tradeoff|compare|premium|vip|upgrade|downgrade|swap|replace|less\s+expensive|smaller\s+gesture|cost\s*trade|lower\s+the\s+cost|keep\s+costs?\s+down)/i.test(
+    n,
+  );
 }
 
 interface ChatFocusedPlan {
@@ -157,6 +176,22 @@ function getSeverityPriority(severity: string | undefined) {
   return order[normalized] ?? 0;
 }
 
+const LOWER_COST_DEMO_FALLBACK: ActionProposalAction[] = [
+  {
+    actionId: "demo_guest_update",
+    label: "Proactive guest update within 30 minutes",
+    description:
+      "Demo low-footprint step when the worker listed no alternate catalog actions; use until catalog alternates exist.",
+    estimatedValue: 0,
+  },
+  {
+    actionId: "demo_escalation_checkpoint",
+    label: "Duty manager triage checkpoint",
+    description: "Demo governance checkpoint with minimal committed spend; pair with manual playbook and coverage review.",
+    estimatedValue: 0,
+  },
+];
+
 function buildChatAdjustedProposal(
   proposal: ActionProposal | undefined,
   incident: IncidentRecord | undefined,
@@ -196,6 +231,7 @@ function buildChatAdjustedProposal(
   );
 
   if (wantsLowerCost) {
+    const actionsSnapshot = JSON.stringify(nextActions);
     if (incidentLooksMinorLostItem) {
       nextActions.splice(
         0,
@@ -218,8 +254,19 @@ function buildChatAdjustedProposal(
         ...cheapestAlternative,
         description: `${cheapestAlternative.description ?? ""} Adjusted after operator requested a lower-cost alternative.`.trim(),
       });
+    } else {
+      nextActions.splice(0, nextActions.length, ...LOWER_COST_DEMO_FALLBACK);
     }
-    adjustmentNotes.push("swapped in a lower-cost alternative");
+    const lowerCostChangedPlan = JSON.stringify(nextActions) !== actionsSnapshot;
+    if (lowerCostChangedPlan) {
+      if (incidentLooksMinorLostItem || cheapestAlternative) {
+        adjustmentNotes.push("swapped in a lower-cost alternative");
+      } else {
+        adjustmentNotes.push("applied lower-footprint demo substitutes (worker supplied no alternate catalog actions)");
+      }
+    } else {
+      adjustmentNotes.push("requested lower cost; no automatic substitution applied");
+    }
   }
 
   if (/(vip|upgrade|more generous|white glove|concierge|personal|premium)/.test(normalized) && richestAlternative) {
@@ -319,7 +366,14 @@ const GuestRecoveryAgent = () => {
   });
 
   const approveMutation = useMutation({
-    mutationFn: (proposalId: string) => api.approveProposal(proposalId),
+    mutationFn: (input: {
+      proposalId: string;
+      chatPreviewOverlay?: Pick<ActionProposal, "actions" | "summary" | "reasoning" | "priority" | "interactive">;
+    }) =>
+      api.approveProposal(
+        input.proposalId,
+        input.chatPreviewOverlay ? { chatPreviewOverlay: input.chatPreviewOverlay } : undefined,
+      ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["incidents", "prioritized", "guest-recovery"] });
       queryClient.invalidateQueries({ queryKey: ["action-proposals"] });
@@ -360,6 +414,7 @@ const GuestRecoveryAgent = () => {
     enabled: Boolean(selectedChatIncidentId),
     refetchInterval: 10000,
   });
+  const focusedProposal = (chatFocusedProposalQuery.data ?? [])[0];
 
   const topGuestIds = Array.from(
     new Set(
@@ -396,12 +451,32 @@ const GuestRecoveryAgent = () => {
   const selectedProposal = incidentIdForProposal
     ? openIncidentProposals.find((proposal) => proposal.incidentId === incidentIdForProposal) ?? openIncidentProposals[0]
     : openIncidentProposals[0];
-  const adjustedProposalPreview = buildChatAdjustedProposal(selectedProposal, incident, lastAdjustmentPrompt);
+
+  const adjustmentPromptIncidentIds = lastAdjustmentPrompt ? extractIncidentIdsFromCommand(lastAdjustmentPrompt) : [];
+  const adjustmentTargetIncidentId = adjustmentPromptIncidentIds[0] ?? selectedChatIncidentId ?? null;
+  const findIncidentAcrossSources = (id: string): IncidentRecord | undefined =>
+    incidents.find((i) => getIncidentIdentifier(i) === id)
+    ?? topRankedIncidents.map(({ incident: ri }) => ri).find((i) => getIncidentIdentifier(i) === id)
+    ?? allIncidents.find((i) => getIncidentIdentifier(i) === id);
+
+  const incidentForChatAdjustment =
+    (adjustmentTargetIncidentId ? findIncidentAcrossSources(adjustmentTargetIncidentId) : undefined) ?? incident;
+  const proposalForChatAdjustment =
+    (adjustmentTargetIncidentId
+      ? openIncidentProposals.find((p) => p.incidentId === adjustmentTargetIncidentId)
+        ?? (focusedProposal?.incidentId === adjustmentTargetIncidentId ? focusedProposal : undefined)
+      : undefined) ?? selectedProposal;
+
+  const adjustedProposalPreview = buildChatAdjustedProposal(
+    proposalForChatAdjustment,
+    incidentForChatAdjustment,
+    lastAdjustmentPrompt,
+  );
   const displayProposal = adjustedProposalPreview ?? selectedProposal;
   const visibleProposals = adjustedProposalPreview
     ? [
       adjustedProposalPreview,
-      ...openIncidentProposals.filter((proposal) => proposal.proposalId !== selectedProposal?.proposalId),
+      ...openIncidentProposals.filter((p) => p.proposalId !== proposalForChatAdjustment?.proposalId),
     ]
     : openIncidentProposals;
   const incidentSeverityById = new Map(
@@ -428,6 +503,21 @@ const GuestRecoveryAgent = () => {
     incidentId: id,
     ...incidentMetaById.get(id),
   }));
+  const idsFromPromptForAlternates = lastAdjustmentPrompt ? extractIncidentIdsFromCommand(lastAdjustmentPrompt) : [];
+  const topTenIncidentIdsForAlternates = new Set(
+    topRankedIncidents
+      .map(({ incident: ri }) => normalizeIncidentIdForAlternatesScope(getIncidentIdentifier(ri)))
+      .filter((id) => Boolean(id) && id !== normalizeIncidentIdForAlternatesScope("Unknown incident")),
+  );
+  const alternatesScopeIncidentIds =
+    idsFromPromptForAlternates.length > 0
+      ? new Set(idsFromPromptForAlternates.map((id) => normalizeIncidentIdForAlternatesScope(id)).filter(Boolean))
+      : topTenIncidentIdsForAlternates;
+  const showWorkerAlternatesUi = operatorRequestedWorkerAlternatesUi(lastAdjustmentPrompt);
+  const showAlternatesForProposalCard = (proposal: ActionProposal) =>
+    showWorkerAlternatesUi &&
+    (proposal.interactive?.alternativeActions?.length ?? 0) > 0 &&
+    alternatesScopeIncidentIds.has(normalizeIncidentIdForAlternatesScope(proposal.incidentId));
   const severityOrder = ["critical", "high", "medium", "low", "unknown"] as const;
   const proposalsBySeverity = severityOrder
     .map((severity) => ({
@@ -482,7 +572,6 @@ const GuestRecoveryAgent = () => {
   const selectedChatFocusedEntry = selectedChatIncidentId
     ? chatFocusedIncidents.find((entry) => entry.incidentId === selectedChatIncidentId)
     : undefined;
-  const focusedProposal = (chatFocusedProposalQuery.data ?? [])[0];
   const selectedChatPlan = selectedChatIncidentId ? chatFocusedPlansByIncidentId[selectedChatIncidentId] : undefined;
 
   const handleChatCommand = (command: string) => {
@@ -563,189 +652,8 @@ const GuestRecoveryAgent = () => {
       />
 
       <div className="grid gap-6 lg:grid-cols-3">
-        {/* Left Column - Guest Profile & Incident */}
+        {/* Left column — incidents ranked by lost revenue potential */}
         <div className="space-y-4">
-          {/* Top 10 Guest Selector */}
-          {topGuestOptions.length > 0 && (
-            <div className="rounded-lg border border-border bg-card p-4">
-              <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground block mb-2">Select Top-10 Ranked Guest</label>
-              <Select value={selectedGuestId} onValueChange={setSelectedGuestId}>
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Select a guest" />
-                </SelectTrigger>
-                <SelectContent>
-                  {topGuestOptions.map(({ guestId, guest: optionGuest }, idx) => {
-                    const displayName = optionGuest ? getGuestDisplayName(optionGuest) : `Guest ${guestId}`;
-
-                    return (
-                    <SelectItem key={String(guestId)} value={String(guestId)}>
-                      #{idx + 1} {displayName}
-                    </SelectItem>
-                    );
-                  })}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-          
-          {/* Guest Profile */}
-          <div className="rounded-lg border border-border bg-card p-4">
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Guest Profile</h2>
-            <div className="flex items-start gap-3">
-              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
-                <User className="h-6 w-6 text-primary" />
-              </div>
-              <div className="flex-1">
-                <p className="font-semibold text-foreground">{getGuestDisplayName(guest)}</p>
-                <div className="flex items-center gap-1.5 mt-1">
-                  <Crown className="h-3 w-3 text-warning" />
-                  <span className="text-xs font-medium text-warning">{guest.loyaltyTier}</span>
-                  <span className="text-xs text-muted-foreground">· {guest.loyaltyNumber}</span>
-                </div>
-              </div>
-            </div>
-            <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
-              <div className="rounded bg-muted p-2">
-                <span className="text-muted-foreground">Cabin</span>
-                <p className="font-medium text-foreground">{guest.cabinNumber}</p>
-              </div>
-              <div className="rounded bg-muted p-2">
-                <span className="text-muted-foreground">Booking</span>
-                <p className="font-medium text-foreground">{guest.bookingId}</p>
-              </div>
-              <div className="rounded bg-muted p-2">
-                <span className="text-muted-foreground flex items-center gap-1"><CreditCard className="h-3 w-3" />Onboard Spend</span>
-                <p className="font-medium text-foreground">${guest.onboardSpend.toLocaleString()}</p>
-              </div>
-              <div className="rounded bg-muted p-2">
-                <span className="text-muted-foreground flex items-center gap-1"><Ship className="h-3 w-3" />Sailing History</span>
-                <p className="font-medium text-foreground">{typeof guest.sailingHistory === "number" ? guest.sailingHistory : "Unknown"} voyages</p>
-              </div>
-            </div>
-            <div className="mt-3 rounded bg-muted p-2 text-xs">
-              <span className="text-muted-foreground flex items-center gap-1"><Star className="h-3 w-3" />Guest Notes</span>
-              <p className="text-foreground mt-0.5">{guest.notes ?? "No notes on file."}</p>
-            </div>
-          </div>
-
-          {/* Active Incident */}
-          <div className="rounded-lg border border-destructive/30 bg-card p-4">
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-2">
-              <MessageSquare className="h-3.5 w-3.5 text-destructive" /> Active Incident
-            </h2>
-            {incident ? (
-              <>
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="text-xs font-mono text-muted-foreground">{getIncidentIdentifier(incident)}</span>
-                  <StatusBadge status={incident.severity} />
-                  <StatusBadge status={incident.status} />
-                </div>
-                <p className="text-sm font-medium text-foreground">{incident.type}: {incident.category}</p>
-                <p className="mt-1.5 text-xs text-muted-foreground leading-relaxed">{incident.description}</p>
-                <div className="mt-3 flex gap-4 text-xs text-muted-foreground">
-                  <span>Reported: {parseTimestamp(incident.createdAt).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}</span>
-                  <span>Updated: {parseTimestamp(incident.updatedAt).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}</span>
-                </div>
-              </>
-            ) : (
-              <p className="text-sm text-muted-foreground">No incidents found for this guest.</p>
-            )}
-          </div>
-
-          {/* All Active Incidents */}
-          <div className="rounded-lg border border-border bg-card p-4">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">All Guest Incidents</h2>
-              <div className="flex gap-4 text-xs">
-                <div className="text-right">
-                  <span className="text-muted-foreground block">Open</span>
-                  <span className="font-semibold text-foreground">{nonClosedIncidents.length}</span>
-                </div>
-                <div className="text-right">
-                  <span className="text-muted-foreground block">Closed</span>
-                  <span className="font-semibold text-foreground">{closedIncidents.length}</span>
-                </div>
-              </div>
-            </div>
-            <div className="space-y-2">
-              {incidents.slice().sort((a, b) => {
-                const aIsOpen = String(a.status).toLowerCase() !== "closed" ? 1 : 0;
-                const bIsOpen = String(b.status).toLowerCase() !== "closed" ? 1 : 0;
-                if (bIsOpen !== aIsOpen) return bIsOpen - aIsOpen;
-                const severityDelta = getSeverityPriority(b.severity) - getSeverityPriority(a.severity);
-                if (severityDelta !== 0) return severityDelta;
-                return parseTimestamp(b.updatedAt).getTime() - parseTimestamp(a.updatedAt).getTime();
-              }).map(inc => (
-                <div key={getIncidentIdentifier(inc)} className="flex items-center justify-between gap-2 rounded bg-muted p-2 text-xs">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      <span className="font-mono text-muted-foreground">{getIncidentIdentifier(inc)}</span>
-                      <StatusBadge status={inc.severity} />
-                    </div>
-                    <p className="text-foreground mt-0.5 truncate">{inc.type}: {inc.category}</p>
-                  </div>
-                  <StatusBadge status={inc.status} />
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Demo Scenario */}
-          <div className="rounded-lg border border-primary/30 bg-primary/5 p-4">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-primary mb-2">Demo Scenario</h3>
-            <div className="text-xs text-muted-foreground space-y-2 leading-relaxed">
-              <p><strong className="text-foreground">Trigger:</strong> {incident ? `${getGuestDisplayName(guest)} was linked to ${incident.type.toLowerCase()} in ${incident.category}. ${incident.description}` : `No active incident is currently associated with ${getGuestDisplayName(guest)}.`}</p>
-              <p><strong className="text-foreground">Analysis:</strong> The agent correlated booking {guest?.bookingId ?? "Unknown"}, loyalty tier {guest?.loyaltyTier ?? "Unknown"}, sailing history {typeof guest?.sailingHistory === "number" ? `${guest.sailingHistory} voyages` : "Unknown"}, and onboard spend {formatCurrency(guest?.onboardSpend)}{scenarioVenue ? ` with ${scenarioVenue.name} operating at ${occupancyPct}% capacity${staffingGapPct ? ` and ${staffingGapPct}% understaffing` : ""}${typeof scenarioVenue.waitTime === "number" ? ` plus a ${scenarioVenue.waitTime}-minute wait time` : ""}` : ""}.</p>
-              <p><strong className="text-foreground">Recovery Plan:</strong> {displayProposal ? `${displayProposal.actions.length}-action plan ${adjustedProposalPreview ? `previewed from chat feedback on worker proposal ${selectedProposal?.proposalId}` : `from worker proposal ${displayProposal.proposalId}`}: ${actionLabels}.` : "No worker-generated action proposal is currently available for this guest."}</p>
-              <p><strong className="text-foreground">Outcome:</strong> {displayProposal ? `Estimated ${formatCurrency(protectedValue)} in future value protected. Churn risk reduced from ${beforeRisk}% to ${afterRisk}% based on current guest value, incident severity, and the proposed actions.` : `Outcome cannot be estimated until a worker proposal is available.`}</p>
-            </div>
-          </div>
-        </div>
-
-        {/* Center Column - Ranked Incidents */}
-        <div className="space-y-4">
-          {/* Chat Focused Incidents */}
-          {recentChattedIncidents.length > 0 && (
-            <div className="space-y-2">
-              <h2 className="text-sm font-semibold text-foreground flex items-center gap-2">
-                <MessageSquare className="h-4 w-4 text-primary" />
-                Chat Focused Incidents ({recentChattedIncidents.length})
-              </h2>
-              {recentChattedIncidents.map(({ incidentId, incident: chatInc, guest: chatGuest }) => (
-                <div key={incidentId} className="rounded-lg border border-primary/30 bg-primary/5 p-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs font-mono text-muted-foreground">{incidentId}</p>
-                      <p className="text-sm font-semibold text-foreground mt-0.5">
-                        {chatInc ? (chatGuest?.fullName ?? chatGuest?.name ?? "Unknown Guest") : "Unknown Guest"}
-                      </p>
-                      {chatInc && (
-                        <div className="flex items-center gap-2 mt-1">
-                          <StatusBadge status={chatInc.severity} />
-                          <StatusBadge status={chatInc.status} />
-                        </div>
-                      )}
-                    </div>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant={selectedChatIncidentId === incidentId ? "default" : "outline"}
-                      className="shrink-0"
-                      onClick={() => setSelectedChatIncidentId(prev => prev === incidentId ? null : incidentId)}
-                    >
-                      {selectedChatIncidentId === incidentId ? "Viewing" : "View Plan"}
-                    </Button>
-                  </div>
-                  {chatInc && (
-                    <p className="mt-2 text-xs text-muted-foreground line-clamp-2">
-                      {chatInc.type}: {chatInc.category} — {chatInc.description}
-                    </p>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-
           <h2 className="text-sm font-semibold text-foreground">Incidents Ranked by Lost Revenue Potential ({topRankedIncidents.length})</h2>
           {topRankedIncidents.map(({ incident: rankedIncident, guest: rankedGuest, potential }: PrioritizedIncident, index) => (
             <div key={getIncidentIdentifier(rankedIncident)} className="rounded-lg border border-border bg-card p-4">
@@ -767,24 +675,214 @@ const GuestRecoveryAgent = () => {
               <p className="mt-2 text-xs text-muted-foreground line-clamp-2">{rankedIncident.type}: {rankedIncident.category} - {rankedIncident.description}</p>
             </div>
           ))}
-
         </div>
 
-        {/* Right Column - Approval Queue (worker-generated action_proposals) */}
+        {/* Center column — guest profile & context (tabs) */}
+        <div className="space-y-4">
+          <Tabs defaultValue="guest" className="w-full">
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="guest">Guest</TabsTrigger>
+              <TabsTrigger value="context">Context</TabsTrigger>
+            </TabsList>
+            <TabsContent value="guest" className="space-y-4">
+              {topGuestOptions.length > 0 && (
+                <div className="rounded-lg border border-border bg-card p-4">
+                  <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground block mb-2">Select Top-10 Ranked Guest</label>
+                  <Select value={selectedGuestId} onValueChange={setSelectedGuestId}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Select a guest" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {topGuestOptions.map(({ guestId, guest: optionGuest }, idx) => {
+                        const displayName = optionGuest ? getGuestDisplayName(optionGuest) : `Guest ${guestId}`;
+
+                        return (
+                          <SelectItem key={String(guestId)} value={String(guestId)}>
+                            #{idx + 1} {displayName}
+                          </SelectItem>
+                        );
+                      })}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
+              <div className="rounded-lg border border-border bg-card p-4">
+                <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Guest Profile</h2>
+                <div className="flex items-start gap-3">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
+                    <User className="h-6 w-6 text-primary" />
+                  </div>
+                  <div className="flex-1">
+                    <p className="font-semibold text-foreground">{getGuestDisplayName(guest)}</p>
+                    <div className="flex items-center gap-1.5 mt-1">
+                      <Crown className="h-3 w-3 text-warning" />
+                      <span className="text-xs font-medium text-warning">{guest.loyaltyTier}</span>
+                      <span className="text-xs text-muted-foreground">· {guest.loyaltyNumber}</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
+                  <div className="rounded bg-muted p-2">
+                    <span className="text-muted-foreground">Cabin</span>
+                    <p className="font-medium text-foreground">{guest.cabinNumber}</p>
+                  </div>
+                  <div className="rounded bg-muted p-2">
+                    <span className="text-muted-foreground">Booking</span>
+                    <p className="font-medium text-foreground">{guest.bookingId}</p>
+                  </div>
+                  <div className="rounded bg-muted p-2">
+                    <span className="text-muted-foreground flex items-center gap-1"><CreditCard className="h-3 w-3" />Onboard Spend</span>
+                    <p className="font-medium text-foreground">${guest.onboardSpend.toLocaleString()}</p>
+                  </div>
+                  <div className="rounded bg-muted p-2">
+                    <span className="text-muted-foreground flex items-center gap-1"><Ship className="h-3 w-3" />Sailing History</span>
+                    <p className="font-medium text-foreground">{typeof guest.sailingHistory === "number" ? guest.sailingHistory : "Unknown"} voyages</p>
+                  </div>
+                </div>
+                <div className="mt-3 rounded bg-muted p-2 text-xs">
+                  <span className="text-muted-foreground flex items-center gap-1"><Star className="h-3 w-3" />Guest Notes</span>
+                  <p className="text-foreground mt-0.5">{guest.notes ?? "No notes on file."}</p>
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-destructive/30 bg-card p-4">
+                <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-2">
+                  <MessageSquare className="h-3.5 w-3.5 text-destructive" /> Active Incident
+                </h2>
+                {incident ? (
+                  <>
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-xs font-mono text-muted-foreground">{getIncidentIdentifier(incident)}</span>
+                      <StatusBadge status={incident.severity} />
+                      <StatusBadge status={incident.status} />
+                    </div>
+                    <p className="text-sm font-medium text-foreground">{incident.type}: {incident.category}</p>
+                    <p className="mt-1.5 text-xs text-muted-foreground leading-relaxed">{incident.description}</p>
+                    <div className="mt-3 flex gap-4 text-xs text-muted-foreground">
+                      <span>Reported: {parseTimestamp(incident.createdAt).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}</span>
+                      <span>Updated: {parseTimestamp(incident.updatedAt).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}</span>
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-sm text-muted-foreground">No incidents found for this guest.</p>
+                )}
+              </div>
+            </TabsContent>
+
+            <TabsContent value="context" className="space-y-4">
+              <Collapsible defaultOpen={false} className="rounded-lg border border-border bg-card">
+                <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 p-4 text-left hover:bg-muted/40 rounded-lg">
+                  <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                    All guest incidents ({incidents.length})
+                  </span>
+                  <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+                </CollapsibleTrigger>
+                <CollapsibleContent className="px-4 pb-4">
+                  <div className="flex gap-4 text-xs mb-3">
+                    <div className="text-right">
+                      <span className="text-muted-foreground block">Open</span>
+                      <span className="font-semibold text-foreground">{nonClosedIncidents.length}</span>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-muted-foreground block">Closed</span>
+                      <span className="font-semibold text-foreground">{closedIncidents.length}</span>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    {incidents.slice().sort((a, b) => {
+                      const aIsOpen = String(a.status).toLowerCase() !== "closed" ? 1 : 0;
+                      const bIsOpen = String(b.status).toLowerCase() !== "closed" ? 1 : 0;
+                      if (bIsOpen !== aIsOpen) return bIsOpen - aIsOpen;
+                      const severityDelta = getSeverityPriority(b.severity) - getSeverityPriority(a.severity);
+                      if (severityDelta !== 0) return severityDelta;
+                      return parseTimestamp(b.updatedAt).getTime() - parseTimestamp(a.updatedAt).getTime();
+                    }).map(inc => (
+                      <div key={getIncidentIdentifier(inc)} className="flex items-center justify-between gap-2 rounded bg-muted p-2 text-xs">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-mono text-muted-foreground">{getIncidentIdentifier(inc)}</span>
+                            <StatusBadge status={inc.severity} />
+                          </div>
+                          <p className="text-foreground mt-0.5 truncate">{inc.type}: {inc.category}</p>
+                        </div>
+                        <StatusBadge status={inc.status} />
+                      </div>
+                    ))}
+                  </div>
+                </CollapsibleContent>
+              </Collapsible>
+
+              <Collapsible defaultOpen={false} className="rounded-lg border border-border bg-muted/20">
+                <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 p-3 text-left hover:bg-muted/40 rounded-lg">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Demo scenario</span>
+                  <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+                </CollapsibleTrigger>
+                <CollapsibleContent className="px-3 pb-3">
+                  <div className="text-xs text-muted-foreground space-y-2 leading-relaxed">
+                    <p><strong className="text-foreground">Trigger:</strong> {incident ? `${getGuestDisplayName(guest)} was linked to ${incident.type.toLowerCase()} in ${incident.category}. ${incident.description}` : `No active incident is currently associated with ${getGuestDisplayName(guest)}.`}</p>
+                    <p><strong className="text-foreground">Analysis:</strong> The agent correlated booking {guest?.bookingId ?? "Unknown"}, loyalty tier {guest?.loyaltyTier ?? "Unknown"}, sailing history {typeof guest?.sailingHistory === "number" ? `${guest.sailingHistory} voyages` : "Unknown"}, and onboard spend {formatCurrency(guest?.onboardSpend)}{scenarioVenue ? ` with ${scenarioVenue.name} operating at ${occupancyPct}% capacity${staffingGapPct ? ` and ${staffingGapPct}% understaffing` : ""}${typeof scenarioVenue.waitTime === "number" ? ` plus a ${scenarioVenue.waitTime}-minute wait time` : ""}` : ""}.</p>
+                    <p><strong className="text-foreground">Recovery Plan:</strong> {displayProposal ? `${displayProposal.actions.length}-action plan ${adjustedProposalPreview ? `previewed from chat feedback on worker proposal ${proposalForChatAdjustment?.proposalId}` : `from worker proposal ${displayProposal.proposalId}`}: ${actionLabels}.` : "No worker-generated action proposal is currently available for this guest."}</p>
+                    <p><strong className="text-foreground">Outcome:</strong> {displayProposal ? `Estimated ${formatCurrency(protectedValue)} in future value protected. Churn risk reduced from ${beforeRisk}% to ${afterRisk}% based on current guest value, incident severity, and the proposed actions.` : `Outcome cannot be estimated until a worker proposal is available.`}</p>
+                  </div>
+                </CollapsibleContent>
+              </Collapsible>
+            </TabsContent>
+          </Tabs>
+        </div>
+
+        {/* Right column — chat focus & plan + approval queue */}
         <div className="space-y-4">
           <div className="space-y-2">
-            <h2 className="text-sm font-semibold text-foreground">Chat Focused Plan</h2>
-            <div className="rounded-lg border border-primary/30 bg-card p-4">
+            <h2 className="text-sm font-semibold text-foreground">Chat focus and plan</h2>
+            <div className="rounded-lg border border-border bg-card p-4">
+              {recentChattedIncidents.length > 0 && (
+                <div className="mb-4 space-y-2 border-b border-border pb-4">
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Chat-focused incidents</p>
+                  {recentChattedIncidents.map(({ incidentId, incident: chatInc, guest: chatGuest }) => (
+                    <div key={incidentId} className="rounded-lg border border-border bg-muted/20 p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-xs font-mono text-muted-foreground">{incidentId}</p>
+                          <p className="text-sm font-semibold text-foreground mt-0.5">
+                            {chatInc ? (chatGuest?.fullName ?? chatGuest?.name ?? "Unknown Guest") : "Unknown Guest"}
+                          </p>
+                          {chatInc && (
+                            <div className="flex items-center gap-2 mt-1">
+                              <StatusBadge status={chatInc.severity} />
+                              <StatusBadge status={chatInc.status} />
+                            </div>
+                          )}
+                        </div>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant={selectedChatIncidentId === incidentId ? "default" : "outline"}
+                          className="shrink-0"
+                          onClick={() => setSelectedChatIncidentId(prev => prev === incidentId ? null : incidentId)}
+                        >
+                          {selectedChatIncidentId === incidentId ? "Viewing" : "View Plan"}
+                        </Button>
+                      </div>
+                      {chatInc && (
+                        <p className="mt-2 text-xs text-muted-foreground line-clamp-2">
+                          {chatInc.type}: {chatInc.category} — {chatInc.description}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
               {!selectedChatIncidentId ? (
                 <p className="text-xs text-muted-foreground leading-relaxed">
-                  Ask chat about a specific incident ID to show the LLM-generated plan here.
+                  {recentChattedIncidents.length > 0
+                    ? "Select “View Plan” on a chat-focused incident above, or ask chat about a specific incident ID."
+                    : "Ask chat about a specific incident ID to show the LLM-generated plan here."}
                 </p>
               ) : selectedChatFocusedEntry ? (
                   <>
-                    <p className="text-[11px] font-mono text-muted-foreground">
-                      Incident: {selectedChatFocusedEntry.incidentId}
-                    </p>
-                    <p className="mt-1 text-sm font-medium text-foreground">
+                    <p className="text-sm font-medium text-foreground">
                       {selectedChatFocusedEntry.guest ? getGuestDisplayName(selectedChatFocusedEntry.guest) : "Unknown guest"}
                     </p>
                     <div className="mt-2 flex items-center gap-2">
@@ -805,13 +903,13 @@ const GuestRecoveryAgent = () => {
                           </div>
                         </div>
                         {selectedChatPlan.guidance?.missingArtifacts && selectedChatPlan.guidance.missingArtifacts.length > 0 && (
-                          <div className="mt-3 rounded-lg border border-warning/30 bg-warning/5 p-3">
-                            <p className="text-[11px] font-semibold uppercase tracking-wider text-warning">
+                          <div className="mt-3 rounded-md border border-warning/25 bg-warning/5 p-2">
+                            <p className="text-[10px] font-semibold uppercase tracking-wider text-warning">
                               Draft artifacts suggested by chat
                             </p>
-                            <div className="mt-2 space-y-1">
+                            <div className="mt-1.5 space-y-1">
                               {selectedChatPlan.guidance.missingArtifacts.map((artifact, index) => (
-                                <p key={`${artifact.artifactType}-${index}`} className="text-xs text-muted-foreground">
+                                <p key={`${artifact.artifactType}-${index}`} className="text-[11px] text-muted-foreground leading-snug">
                                   • <span className="text-foreground font-medium">{artifact.artifactType}</span>: {artifact.title}
                                 </p>
                               ))}
@@ -858,13 +956,13 @@ const GuestRecoveryAgent = () => {
           <h2 className="text-sm font-semibold text-foreground">Recovery Plan Approval Queue (Top-10)</h2>
 
           {adjustedProposalPreview && lastAdjustmentPrompt && (
-            <div className="rounded-lg border border-warning/30 bg-warning/5 p-4">
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-warning">Chat-Adjusted Demo Preview</p>
-              <p className="mt-2 text-xs text-muted-foreground leading-relaxed">
+            <div className="rounded-md border border-warning/20 bg-warning/5 p-2.5">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-warning">Chat-adjusted demo preview</p>
+              <p className="mt-1.5 text-xs text-muted-foreground leading-relaxed">
                 Latest prompt: <strong className="text-foreground">{lastAdjustmentPrompt}</strong>
               </p>
-              <p className="mt-2 text-xs text-muted-foreground leading-relaxed">
-                This preview shows how operator chat can refine the worker-generated plan without changing the stored Couchbase proposal until approval/execution logic is added.
+              <p className="mt-1.5 text-xs text-muted-foreground leading-relaxed">
+                Approving a chat-adjusted card updates the underlying Couchbase proposal with the previewed actions and marks it approved for execution.
               </p>
             </div>
           )}
@@ -893,7 +991,7 @@ const GuestRecoveryAgent = () => {
               </div>
 
               {proposals.map((proposal: ActionProposal) => (
-                <div key={proposal.proposalId} className="rounded-lg border border-border bg-card p-4">
+                <div key={proposal.proposalId} className="rounded-lg border border-border bg-card p-4 shadow-sm">
                   <div className="flex items-start justify-between gap-2 mb-3">
                     <div className="min-w-0 flex-1">
                       <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{proposal.proposalId.includes("::chat-preview") ? "Chat-Adjusted Preview" : "Agent Proposal"}</p>
@@ -926,7 +1024,23 @@ const GuestRecoveryAgent = () => {
                             size="sm" 
                             className="shrink-0" 
                             disabled={approveMutation.isPending || proposal.status === "approved" || proposal.status === "executed"}
-                            onClick={() => approveMutation.mutate(proposal.proposalId)}
+                            onClick={() => {
+                              const id = proposal.proposalId;
+                              if (id.includes("::chat-preview")) {
+                                approveMutation.mutate({
+                                  proposalId: id,
+                                  chatPreviewOverlay: {
+                                    actions: proposal.actions,
+                                    summary: proposal.summary,
+                                    reasoning: proposal.reasoning,
+                                    priority: proposal.priority,
+                                    interactive: proposal.interactive,
+                                  },
+                                });
+                              } else {
+                                approveMutation.mutate({ proposalId: id });
+                              }
+                            }}
                           >
                             {proposal.status === "approved" || proposal.status === "executed" ? "APPROVED" : "APPROVE"}
                           </Button>
@@ -934,6 +1048,35 @@ const GuestRecoveryAgent = () => {
                       </div>
                     ))}
                   </div>
+
+                  {showAlternatesForProposalCard(proposal) && (
+                    <Collapsible defaultOpen={false} className="mt-3 pt-3 border-t border-border">
+                      <CollapsibleTrigger className="flex w-full items-center justify-between gap-2 text-left hover:bg-muted/30 rounded-md py-1.5 -mx-1 px-1">
+                        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                          Worker alternate actions ({(proposal.interactive?.alternativeActions ?? []).length})
+                        </p>
+                        <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+                      </CollapsibleTrigger>
+                      <CollapsibleContent>
+                        <ul className="mt-2 space-y-2">
+                          {(proposal.interactive?.alternativeActions ?? []).map((alt) => (
+                            <li
+                              key={alt.actionId}
+                              className="rounded-lg border border-dashed border-border/60 bg-muted/15 p-2 text-[11px] text-muted-foreground leading-relaxed"
+                            >
+                              <span className="font-medium text-foreground">{alt.label}</span>
+                              {alt.description ? <span className="block mt-0.5">{alt.description}</span> : null}
+                              {typeof alt.estimatedValue === "number" && !Number.isNaN(alt.estimatedValue) ? (
+                                <span className="block mt-1 text-foreground font-medium">
+                                  Estimated value: {formatCurrency(alt.estimatedValue)}
+                                </span>
+                              ) : null}
+                            </li>
+                          ))}
+                        </ul>
+                      </CollapsibleContent>
+                    </Collapsible>
+                  )}
 
                   {proposal.interactive?.followUpQuestions && proposal.interactive.followUpQuestions.length > 0 && (
                     <div className="mt-3 pt-3 border-t border-border">

@@ -2,6 +2,7 @@
 import express from 'express';
 import type { Response } from 'express';
 import { db } from '../lib/couchbase.ts';
+import { validatePlanAdjustmentPayload, type PlanAdjustmentResponse } from './planAdjustmentValidation.ts';
 
 const router = express.Router();
 
@@ -165,17 +166,6 @@ interface ActionCatalogRecord {
   loyaltyTier?: string | string[];
 }
 
-interface PlanAdjustmentResponse {
-  assessmentHeadline: string;
-  whatIAmWeighing: string[];
-  currentPlanOnFile: string[];
-  howIWouldAdjust: string[];
-  followUpActions: string[];
-  riskNotes: string[];
-  confidence: number;
-  citations: string[];
-}
-
 function tokenizeText(input: string) {
   return new Set(
     input
@@ -200,103 +190,26 @@ function includesMatch(field: unknown, expected: string) {
   return !normalizedField || normalizedField === target || normalizedField === 'any';
 }
 
-function toStringArray(value: unknown) {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((item) => String(item || '').trim())
-    .filter(Boolean);
+/** Align playbook incidentType with guest incident type (hyphen/space/underscore tolerant). */
+function normalizeIncidentTypeForPlaybookMatch(value: string) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/_/g, '-');
 }
 
-function toBoundedBulletList(value: unknown, minItems = 1, maxItems = 6) {
-  const items = toStringArray(value).slice(0, maxItems);
-  if (items.length < minItems) {
-    throw new Error(`Expected at least ${minItems} bullet item(s)`);
+function playbookIncidentTypeMatches(field: unknown, incidentType: string) {
+  const want = normalizeIncidentTypeForPlaybookMatch(incidentType);
+  if (!want) return true;
+  if (Array.isArray(field)) {
+    return field.some((entry) => {
+      const token = normalizeIncidentTypeForPlaybookMatch(String(entry || ''));
+      return !token || token === 'any' || token === want;
+    });
   }
-  return items;
-}
-
-function parseConfidence(value: unknown) {
-  const num = Number(value);
-  if (!Number.isFinite(num)) {
-    throw new Error('LLM confidence must be numeric');
-  }
-  return Math.min(1, Math.max(0, num));
-}
-
-function validatePlanAdjustmentPayload(
-  payload: unknown,
-  allowedActionIds: Set<string>,
-  availableCitationIds: Set<string>,
-  options?: {
-    incidentType?: string;
-    hasDefinedActions?: boolean;
-    hasDefinedPlaybooks?: boolean;
-  },
-) {
-  const data = (payload as Record<string, unknown>) || {};
-  const assessmentHeadline = String(data.assessmentHeadline || '').trim();
-  if (!assessmentHeadline) {
-    throw new Error('LLM payload missing assessmentHeadline');
-  }
-
-  const citations = toBoundedBulletList(data.citations, 1, 12);
-
-  const currentPlanOnFile = toBoundedBulletList(data.currentPlanOnFile, 1, 8);
-  const howIWouldAdjust = toBoundedBulletList(data.howIWouldAdjust, 1, 8);
-  const whatIAmWeighing = toBoundedBulletList(data.whatIAmWeighing, 2, 8);
-  const followUpActions = toBoundedBulletList(data.followUpActions, 1, 8);
-  const riskNotes = toBoundedBulletList(data.riskNotes, 1, 8);
-
-  const referencedActions = howIWouldAdjust
-    .map((line) => {
-      const m = line.match(/\[(gr_[a-z0-9_\-]+)\]/i);
-      return m ? m[1] : undefined;
-    })
-    .filter((value): value is string => Boolean(value));
-  const unknownActions = referencedActions.filter((actionId) => !allowedActionIds.has(actionId));
-  if (unknownActions.length > 0) {
-    throw new Error(`LLM payload referenced unknown action IDs: ${unknownActions.join(', ')}`);
-  }
-
-  const incidentType = normalizeLower(options?.incidentType);
-  const hasDefinedActions = Boolean(options?.hasDefinedActions);
-  const hasDefinedPlaybooks = Boolean(options?.hasDefinedPlaybooks);
-  const combinedText = [
-    assessmentHeadline,
-    ...currentPlanOnFile,
-    ...howIWouldAdjust,
-    ...followUpActions,
-    ...riskNotes,
-  ].join(' ').toLowerCase();
-
-  if (incidentType === 'safety' && !hasDefinedActions) {
-    if (!/no\s+defined\s+action|no\s+catalog\s+action|no\s+existing\s+action/.test(combinedText)) {
-      throw new Error('Safety response must explicitly state that no defined actions exist for this incident type');
-    }
-
-    if (/(future\s+cruise\s+credit|refund|voucher|compensation|upgrade|discount|onboard\s+credit)/.test(combinedText)) {
-      throw new Error('Safety response cannot recommend compensation-style actions when no defined actions exist');
-    }
-  }
-
-  if (!hasDefinedActions && !/no\s+defined\s+action|no\s+catalog\s+action|no\s+existing\s+action/.test(combinedText)) {
-    throw new Error('Response must explicitly state that no defined catalog actions exist for this incident context');
-  }
-
-  if (!hasDefinedPlaybooks && !/no\s+defined\s+playbook|no\s+existing\s+playbook|not\s+covered\s+by\s+playbook/.test(combinedText)) {
-    throw new Error('Response must explicitly state that no defined playbook exists for this incident context');
-  }
-
-  return {
-    assessmentHeadline,
-    whatIAmWeighing,
-    currentPlanOnFile,
-    howIWouldAdjust,
-    followUpActions,
-    riskNotes,
-    confidence: parseConfidence(data.confidence),
-    citations,
-  } as PlanAdjustmentResponse;
+  const token = normalizeIncidentTypeForPlaybookMatch(String(field || ''));
+  return !token || token === 'any' || token === want;
 }
 
 function renderPlanAdjustmentMarkdown(params: {
@@ -500,7 +413,7 @@ async function loadPlaybookIdsForContext(incident: any, guest: any) {
       }
       return Boolean(String(typeField || '').trim());
     })
-    .filter((row) => includesMatch(row.incidentType, incidentType))
+    .filter((row) => playbookIncidentTypeMatches(row.incidentType, incidentType))
     .filter((row) => includesMatch(row.severity, severity))
     .filter((row) => includesMatch(row.loyaltyTier, loyaltyTier))
     .map((row) => String(row.playbookId || '').trim())
@@ -659,8 +572,8 @@ async function runPlanAdjustmentLlm(params: {
             'If referencing a known actionId, include it in square brackets like [gr_action_id].',
             'Only reference action IDs from allowedActions.',
             'Citations must include IDs from the provided context (incidentId, proposalId, ruleId, actionId, chat_session doc id, chat_message doc id).',
-            'If guardrails.mustStateNoDefinedActionsWhenEmpty is true, explicitly state there are no defined catalog actions for this incident context and provide safety-containment steps only.',
-            'If guardrails.mustStateNoDefinedPlaybooksWhenEmpty is true, explicitly state there is no defined playbook for this incident type/context.',
+            'If guardrails.mustStateNoDefinedActionsWhenEmpty is true, include at least one clear acknowledgment in assessmentHeadline, whatIAmWeighing, currentPlanOnFile, howIWouldAdjust, followUpActions, or riskNotes — e.g. phrases like "no defined catalog actions for this incident context", "no matching catalog actions", or "no eligible actions defined for this context" — then provide safety-containment steps only.',
+            'If guardrails.mustStateNoDefinedPlaybooksWhenEmpty is true, include at least one clear acknowledgment in those same fields — e.g. "no defined playbook for this incident context", "no matching playbook", "not covered by an approved playbook", or "playbook coverage is missing" — before other operational guidance.',
             'When no defined actions are available, do not recommend compensation-style actions such as credits, refunds, vouchers, or upgrades.',
             'When incident types are not covered in action catalog or playbooks, call that out directly before giving any next-step guidance.',
           ].join(' '),
@@ -1771,7 +1684,7 @@ router.get('/incidents/prioritized', async (req, res) => {
                ) AS potential
         FROM voyageops.guests.incidents i
         JOIN voyageops.guests.guests g ON i.guestId = META(g).id
-        WHERE LOWER(IFMISSINGORNULL(i.status, 'open')) != 'closed'
+        WHERE LOWER(IFMISSINGORNULL(i.status, 'open')) IN ['open', 'reviewing', 'pending']
       ),
       dedup AS (
         SELECT scored.*,
@@ -1961,21 +1874,46 @@ router.get('/action-proposals', async (req, res) => {
   }
 });
 
+const CHAT_PREVIEW_PROPOSAL_SUFFIX = '::chat-preview';
+
 // API: Approve an action proposal (updates proposal, incident status, creates execution doc)
 router.post('/action-proposals/:proposalId/approve', async (req, res) => {
   try {
-    const proposalId = String(req.params.proposalId || '').trim();
-    if (!proposalId) {
+    const paramProposalId = String(req.params.proposalId || '').trim();
+    if (!paramProposalId) {
+      return res.status(400).json({ error: 'proposalId required' });
+    }
+
+    const isChatPreviewId = paramProposalId.endsWith(CHAT_PREVIEW_PROPOSAL_SUFFIX);
+    const storageProposalId = isChatPreviewId
+      ? paramProposalId.slice(0, -CHAT_PREVIEW_PROPOSAL_SUFFIX.length)
+      : paramProposalId;
+    if (!storageProposalId) {
       return res.status(400).json({ error: 'proposalId required' });
     }
 
     // 1. Load the existing proposal
     let proposalDoc: Record<string, unknown>;
     try {
-      const doc = await db.actionProposals.get(proposalId);
+      const doc = await db.actionProposals.get(storageProposalId);
       proposalDoc = doc.content as Record<string, unknown>;
     } catch {
       return res.status(404).json({ error: 'Proposal not found' });
+    }
+
+    if (isChatPreviewId) {
+      const overlay = req.body?.chatPreviewOverlay;
+      if (overlay && typeof overlay === 'object') {
+        if (Array.isArray((overlay as any).actions)) {
+          proposalDoc.actions = (overlay as any).actions;
+        }
+        if ((overlay as any).summary != null) proposalDoc.summary = String((overlay as any).summary);
+        if ((overlay as any).reasoning != null) proposalDoc.reasoning = String((overlay as any).reasoning);
+        if ((overlay as any).priority != null) proposalDoc.priority = String((overlay as any).priority);
+        if ((overlay as any).interactive != null && typeof (overlay as any).interactive === 'object') {
+          proposalDoc.interactive = (overlay as any).interactive;
+        }
+      }
     }
 
     const incidentId = String(proposalDoc.incidentId || '').trim();
@@ -1985,7 +1923,7 @@ router.post('/action-proposals/:proposalId/approve', async (req, res) => {
     const approvedBy = String(req.body?.approvedBy || 'operator').trim();
 
     // 2. Update the proposal status to "approved"
-    await db.actionProposals.upsert(proposalId, {
+    await db.actionProposals.upsert(storageProposalId, {
       ...proposalDoc,
       status: 'approved',
       approvedAt: now,
@@ -2016,10 +1954,10 @@ router.post('/action-proposals/:proposalId/approve', async (req, res) => {
     // 4. Create or refresh the action_execution document.
     // Deterministic key (one execution doc per proposal) keeps re-clicks idempotent —
     // an upsert simply refreshes approvedAt/updatedAt instead of creating duplicates.
-    const executionId = `exec::${proposalId}`;
+    const executionId = `exec::${storageProposalId}`;
     const executionDoc = {
       executionId,
-      proposalId,
+      proposalId: storageProposalId,
       guestId,
       incidentId,
       status: 'approved',
@@ -2039,7 +1977,7 @@ router.post('/action-proposals/:proposalId/approve', async (req, res) => {
 
     return res.json({
       ok: true,
-      proposalId,
+      proposalId: storageProposalId,
       executionId,
       incidentId,
       guestId,

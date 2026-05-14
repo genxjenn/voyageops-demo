@@ -332,10 +332,16 @@ export const api = {
   ) => postJson<AgentQueryResponse>("/api/agent-query", { query, agentType, sessionId }),
   actionProposals: (guestId?: string, incidentId?: string) =>
     fetchJson<ActionProposal[]>("/api/action-proposals", { guestId, incidentId }),
-  approveProposal: (proposalId: string) =>
+  approveProposal: (
+    proposalId: string,
+    body?: {
+      approvedBy?: string;
+      chatPreviewOverlay?: Pick<ActionProposal, "actions" | "summary" | "reasoning" | "priority" | "interactive">;
+    },
+  ) =>
     postJson<{ ok: boolean; proposalId: string; executionId: string; incidentId: string; guestId: string; status: string; approvedAt: string }>(
       `/api/action-proposals/${encodeURIComponent(proposalId)}/approve`,
-      {},
+      body ?? {},
     ),
 };
 
