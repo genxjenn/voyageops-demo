@@ -2310,7 +2310,14 @@ router.post('/agent-query', async (req, res) => {
     } catch (llmError) {
       llmFallbackUsed = true;
       llmFailureDetail = llmError instanceof Error ? llmError.message : String(llmError);
-      console.warn('LLM plan adjustment failed, using deterministic fallback:', llmFailureDetail);
+      const incidentIdForLog = String(
+        primaryIncident?.incidentId || primaryIncident?.id || primaryIncident?.docId || requestedIncidentId || '',
+      ).trim();
+      console.warn(
+        'LLM plan adjustment failed, using deterministic fallback:',
+        llmFailureDetail,
+        incidentIdForLog ? `(incidentId: ${incidentIdForLog})` : '(incidentId: unknown)',
+      );
 
       response = renderGuardrailedFallbackMarkdown({
         incident: primaryIncident,
