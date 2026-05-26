@@ -1,3 +1,4 @@
+import { PageTitle, SectionTitle, SectionSubtitle } from "@/components/PageHeading";
 import { Database, Server, Brain, Zap, Search, Code2, Layers, ArrowRight } from "lucide-react";
 
 const Architecture = () => {
@@ -75,16 +76,18 @@ const Architecture = () => {
   return (
     <div className="p-6 space-y-6 max-w-[1200px] mx-auto">
       <div>
-        <h1 className="text-2xl font-bold text-foreground">Technical Architecture</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">How VoyageOps AI maps to a production architecture with Couchbase, event streams, and LLM-based agent reasoning</p>
+        <PageTitle>Technical Architecture</PageTitle>
+        <SectionSubtitle className="mt-1">
+          How VoyageOps AI maps to a production architecture with Couchbase, event streams, and LLM-based agent reasoning
+        </SectionSubtitle>
       </div>
 
       {/* Architecture Overview */}
       <div className="rounded-lg border border-primary/30 bg-primary/5 p-5">
-        <h2 className="text-sm font-semibold text-primary mb-2">Architecture Overview</h2>
-        <p className="text-xs text-muted-foreground leading-relaxed">
+        <SectionTitle className="mb-2">Architecture Overview</SectionTitle>
+        <SectionSubtitle size="sm" className="leading-relaxed">
           VoyageOps AI is designed as a modular, event-driven operations platform. The current MVP demonstrates the complete user experience with mock data. Each layer below shows what is mocked today and how it maps to production services. The data model uses JSON documents designed for Couchbase's document model, with entities linked by ID references that support N1QL joins and sub-document operations.
-        </p>
+        </SectionSubtitle>
       </div>
 
       {/* Architecture Layers */}
@@ -93,7 +96,7 @@ const Architecture = () => {
           <div key={layer.title} className={`rounded-lg border bg-card p-5 ${layer.color.split(" ")[1]}`}>
             <div className="flex items-center gap-2 mb-3">
               <layer.icon className={`h-5 w-5 ${layer.color.split(" ")[0]}`} />
-              <h2 className="text-sm font-semibold text-foreground">{layer.title}</h2>
+              <SectionTitle>{layer.title}</SectionTitle>
             </div>
 
             <div className="grid gap-4 md:grid-cols-2">
@@ -132,7 +135,7 @@ const Architecture = () => {
 
       {/* Couchbase Fit */}
       <div className="rounded-lg border border-border bg-card p-5">
-        <h2 className="text-sm font-semibold text-foreground mb-3">Why Couchbase for Cruise Operations?</h2>
+        <SectionTitle className="mb-3">Why Couchbase for Cruise Operations?</SectionTitle>
         <div className="grid gap-3 md:grid-cols-2 text-xs text-muted-foreground">
           {[
             { title: "JSON Document Model", desc: "Cruise operational data is naturally hierarchical — guest profiles with nested preferences, bookings with line items, venues with real-time state. Couchbase's document model maps directly." },

@@ -4,7 +4,6 @@ import {
   LayoutDashboard, UserCheck, ChevronLeft, ChevronRight, Anchor, FileText
 } from "lucide-react";
 import { useState } from "react";
-import { GuidedDemo } from "@/components/GuidedDemo";
 import { StickyHeader } from "@/components/StickyHeader";
 import {
   Breadcrumb, BreadcrumbList, BreadcrumbItem, BreadcrumbLink, BreadcrumbPage, BreadcrumbSeparator
@@ -124,8 +123,6 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
           {children}
         </main>
       </div>
-
-      <GuidedDemo />
     </div>
   );
 }

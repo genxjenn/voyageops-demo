@@ -43,6 +43,9 @@
     --info: 210 80% 55%;
     --info-foreground: 210 80% 10%;
 
+    --section-heading: 215 75% 28%;
+    --subtitle: 265 6% 32%;
+
     --border: 256 1.3% 92.9%;
     --input: 256 1.3% 92.9%;
     --ring: 257 4% 70.4%;
@@ -99,6 +102,8 @@
     --accent-foreground: 248 0.3% 98.4%;
     --destructive: 22 19.1% 70.4%;
     --destructive-foreground: 248 0.3% 98.4%;
+    --section-heading: 210 70% 72%;
+    --subtitle: 248 5% 78%;
     --border: 0 0% 100% / 10%;
     --input: 0 0% 100% / 15%;
     --ring: 264 2.7% 55.1%;
@@ -129,6 +134,11 @@
 @layer base {
   * {
     @apply border-border;
+  }
+
+  html {
+    /* Global typography scaling (all rem-based sizing increases). */
+    font-size: 17px;
   }
 
   body {

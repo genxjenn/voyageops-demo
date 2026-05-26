@@ -328,7 +328,6 @@ export function AgentChat({ agentType = "general", className, onCommand, onAgent
   const [chatSessionId] = useState(() => `${agentType}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const handleSendRef = useRef<(text?: string) => void>(() => {});
   const seenLogIds = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -484,20 +483,6 @@ export function AgentChat({ agentType = "general", className, onCommand, onAgent
       simulateStreaming(response, assistantId);
     }, 400);
   }, [input, isStreaming, agentType, chatSessionId, simulateStreaming, liveData, onCommand, onAgentResponse]);
-
-  // Keep ref in sync and listen for guided demo events
-  handleSendRef.current = handleSend;
-
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      if (detail?.agentType === agentType && detail?.query) {
-        setTimeout(() => handleSendRef.current(detail.query), 300);
-      }
-    };
-    window.addEventListener("guided-demo-query", handler);
-    return () => window.removeEventListener("guided-demo-query", handler);
-  }, [agentType]);
 
   const agentLabels: Record<string, string> = {
     general: "VoyageOps AI",

@@ -2,6 +2,7 @@ import {
   AreaChart, Area, BarChart, Bar, RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
 } from "recharts";
+import { SubsectionTitle, SectionSubtitle } from "@/components/PageHeading";
 
 const satisfactionData = [
   { day: "Day 1", overall: 4.5, dining: 4.3, entertainment: 4.6, cabin: 4.7 },
@@ -52,8 +53,8 @@ const tooltipStyle = {
 export function SatisfactionTrendsChart() {
   return (
     <div className="rounded-lg border border-border bg-card p-4 animate-fade-in">
-      <h3 className="text-sm font-semibold text-foreground mb-1">Guest Satisfaction Trends</h3>
-      <p className="text-xs text-muted-foreground mb-4">Daily satisfaction scores across key areas (1–5 scale)</p>
+      <SubsectionTitle className="mb-1">Guest Satisfaction Trends</SubsectionTitle>
+      <SectionSubtitle size="sm" className="mb-4">Daily satisfaction scores across key areas (1–5 scale)</SectionSubtitle>
       <div className="h-[260px]">
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={satisfactionData} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
@@ -86,8 +87,8 @@ export function SatisfactionTrendsChart() {
 export function RevenueProtectedChart() {
   return (
     <div className="rounded-lg border border-border bg-card p-4 animate-fade-in" style={{ animationDelay: "0.1s" }}>
-      <h3 className="text-sm font-semibold text-foreground mb-1">Revenue Protection</h3>
-      <p className="text-xs text-muted-foreground mb-4">Cumulative revenue protected vs. at-risk from recovery actions</p>
+      <SubsectionTitle className="mb-1">Revenue Protection</SubsectionTitle>
+      <SectionSubtitle size="sm" className="mb-4">Cumulative revenue protected vs. at-risk from recovery actions</SectionSubtitle>
       <div className="h-[260px]">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={revenueData} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
@@ -108,8 +109,8 @@ export function RevenueProtectedChart() {
 export function AgentConfidenceChart() {
   return (
     <div className="rounded-lg border border-border bg-card p-4 animate-fade-in" style={{ animationDelay: "0.2s" }}>
-      <h3 className="text-sm font-semibold text-foreground mb-1">Recovery Agent Confidence</h3>
-      <p className="text-xs text-muted-foreground mb-4">Performance metrics for the Guest Recovery agent</p>
+      <SubsectionTitle className="mb-1">Recovery Agent Confidence</SubsectionTitle>
+      <SectionSubtitle size="sm" className="mb-4">Performance metrics for the Guest Recovery agent</SectionSubtitle>
       <div className="h-[260px]">
         <ResponsiveContainer width="100%" height="100%">
           <RadarChart cx="50%" cy="50%" outerRadius="70%" data={recoveryConfidenceData}>

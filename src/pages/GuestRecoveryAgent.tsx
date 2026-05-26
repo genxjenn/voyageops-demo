@@ -1,4 +1,5 @@
 import { AgentChat } from "@/components/AgentChat";
+import { PageTitle, SectionTitle, SectionSubtitle } from "@/components/PageHeading";
 import { StatusBadge } from "@/components/StatusBadge";
 import { User, Crown, CreditCard, Ship, MessageSquare, Star, ChevronDown } from "lucide-react";
 import { useQuery, useQueries, useQueryClient, useMutation } from "@tanstack/react-query";
@@ -769,8 +770,10 @@ const GuestRecoveryAgent = () => {
   return (
     <div className="p-6 space-y-6 max-w-[1400px] mx-auto">
       <div>
-        <h1 className="text-2xl font-bold text-foreground">Guest Service Recovery Agent</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">Detect service failures, correlate guest data, and recommend recovery actions</p>
+        <PageTitle>Guest Service Recovery Agent</PageTitle>
+        <SectionSubtitle className="mt-1">
+          Detect service failures, correlate guest data, and recommend recovery actions
+        </SectionSubtitle>
       </div>
 
       {/* NLP Chat Interface */}
@@ -784,7 +787,7 @@ const GuestRecoveryAgent = () => {
       <div className="grid gap-6 lg:grid-cols-3">
         {/* Left column — incidents ranked by lost revenue potential */}
         <div className="space-y-4">
-          <h2 className="text-sm font-semibold text-foreground">Incidents Ranked by Lost Revenue Potential ({topRankedIncidents.length})</h2>
+          <SectionTitle>Incidents Ranked by Lost Revenue Potential ({topRankedIncidents.length})</SectionTitle>
           {topRankedIncidents.map(({ incident: rankedIncident, guest: rankedGuest, potential }: PrioritizedIncident, index) => (
             <div key={getIncidentIdentifier(rankedIncident)} className="rounded-lg border border-border bg-card p-4">
               <div className="flex items-center justify-between gap-3">
@@ -900,7 +903,7 @@ const GuestRecoveryAgent = () => {
               </div>
 
               <div className="space-y-4">
-                <h2 className="text-sm font-semibold text-foreground">Recovery Plan Approval Queue (Top-10)</h2>
+                <SectionTitle>Recovery Plan Approval Queue (Top-10)</SectionTitle>
 
                 {adjustedProposalPreview && lastAdjustmentPrompt && (
                   <div className="rounded-md border border-warning/20 bg-warning/5 p-2.5">
@@ -1014,7 +1017,7 @@ const GuestRecoveryAgent = () => {
         {/* Right column — chat-focused incident: selector, LLM plan, full proposal cards for viewed incident */}
         <div className="space-y-4">
           <div className="space-y-2">
-            <h2 className="text-sm font-semibold text-foreground">Chat focus and plan</h2>
+            <SectionTitle>Chat focus and plan</SectionTitle>
             <div className="rounded-lg border border-border bg-card p-4">
               {recentChattedIncidents.length > 0 && (
                 <div className="mb-4 space-y-2 border-b border-border pb-4">
