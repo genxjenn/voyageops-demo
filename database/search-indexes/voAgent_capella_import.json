@@ -1,0 +1,156 @@
+{
+  "type": "fulltext-index",
+  "name": "voAgent_vector_playbooks_embedding",
+  "sourceType": "gocbcore",
+  "sourceName": "voyageops",
+  "sourceParams": {},
+  "planParams": {
+    "maxPartitionsPerPIndex": 1024,
+    "indexPartitions": 1
+  },
+  "params": {
+    "doc_config": {
+      "docid_prefix_delim": "",
+      "docid_regexp": "",
+      "mode": "scope.collection.type_field",
+      "type_field": "agentType"
+    },
+    "mapping": {
+      "analysis": {},
+      "default_analyzer": "standard",
+      "default_datetime_parser": "dateTimeOptional",
+      "default_field": "_all",
+      "default_mapping": {
+        "dynamic": false,
+        "enabled": false
+      },
+      "default_type": "_default",
+      "docvalues_dynamic": false,
+      "index_dynamic": false,
+      "store_dynamic": false,
+      "type_field": "_type",
+      "types": {
+        "agent.playbooks.guest-recovery": {
+          "dynamic": false,
+          "enabled": true,
+          "properties": {
+            "active": {
+              "enabled": true,
+              "dynamic": false,
+              "fields": [
+                {
+                  "name": "active",
+                  "type": "boolean",
+                  "index": true,
+                  "store": true,
+                  "docvalues": true
+                }
+              ]
+            },
+            "agentType": {
+              "enabled": true,
+              "dynamic": false,
+              "fields": [
+                {
+                  "name": "agentType",
+                  "type": "text",
+                  "index": true,
+                  "store": true,
+                  "docvalues": true
+                }
+              ]
+            },
+            "incidentType": {
+              "enabled": true,
+              "dynamic": false,
+              "fields": [
+                {
+                  "name": "incidentType",
+                  "type": "text",
+                  "index": true,
+                  "store": true,
+                  "docvalues": true,
+                  "include_term_vectors": true
+                }
+              ]
+            },
+            "severity": {
+              "enabled": true,
+              "dynamic": false,
+              "fields": [
+                {
+                  "name": "severity",
+                  "type": "text",
+                  "index": true,
+                  "store": true,
+                  "docvalues": true
+                }
+              ]
+            },
+            "loyaltyTier": {
+              "enabled": true,
+              "dynamic": false,
+              "fields": [
+                {
+                  "name": "loyaltyTier",
+                  "type": "text",
+                  "index": true,
+                  "store": true,
+                  "docvalues": true
+                }
+              ]
+            },
+            "title": {
+              "enabled": true,
+              "dynamic": false,
+              "fields": [
+                {
+                  "name": "title",
+                  "type": "text",
+                  "index": true,
+                  "store": true,
+                  "docvalues": true,
+                  "include_term_vectors": true
+                }
+              ]
+            },
+            "description": {
+              "enabled": true,
+              "dynamic": false,
+              "fields": [
+                {
+                  "name": "description",
+                  "type": "text",
+                  "index": true,
+                  "store": true,
+                  "docvalues": true,
+                  "include_term_vectors": true
+                }
+              ]
+            },
+            "embedding": {
+              "enabled": true,
+              "dynamic": false,
+              "fields": [
+                {
+                  "name": "embedding",
+                  "type": "vector",
+                  "dims": 1536,
+                  "similarity": "l2_norm",
+                  "index": true,
+                  "store": false,
+                  "docvalues": false,
+                  "vector_index_optimized_for": "recall"
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "store": {
+      "indexType": "scorch",
+      "segmentVersion": 16
+    }
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "bucket": "voyageops",
+  "deployOrder": ["incidentTimestamps", "guest_recovery_trigger"],
+  "functions": [
+    {
+      "name": "incidentTimestamps",
+      "handlerFile": "database/eventing.incidentTimestamps.js",
+      "source": { "bucket": "voyageops", "scope": "guests", "collection": "incidents" },
+      "metadata": { "bucket": "voyageops", "scope": "eventing", "collection": "sysdata" },
+      "bindings": [
+        {
+          "alias": "src",
+          "bucket": "voyageops",
+          "scope": "guests",
+          "collection": "incidents",
+          "access": "rw"
+        }
+      ]
+    },
+    {
+      "name": "guest_recovery_trigger",
+      "handlerFile": "database/eventing.guestIncidentTrigger.js",
+      "source": { "bucket": "voyageops", "scope": "guests", "collection": "incidents" },
+      "metadata": { "bucket": "voyageops", "scope": "eventing", "collection": "sysdata" },
+      "bindings": [
+        {
+          "alias": "src",
+          "bucket": "voyageops",
+          "scope": "guests",
+          "collection": "incidents",
+          "access": "r"
+        },
+        {
+          "alias": "dst",
+          "bucket": "voyageops",
+          "scope": "agent",
+          "collection": "agent_runs",
+          "access": "rw"
+        }
+      ]
+    }
+  ]
+}

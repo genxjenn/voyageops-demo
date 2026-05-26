@@ -2,9 +2,9 @@
 -- Eventing Scope + Metadata Collection
 -- ============================================================================
 
-CREATE SCOPE voyageops.eventing;
+CREATE SCOPE voyageops.eventing IF NOT EXISTS;
 
-CREATE COLLECTION voyageops.eventing.sysdata;
+CREATE COLLECTION voyageops.eventing.sysdata IF NOT EXISTS;
 
 -- ============================================================================
 -- Eventing Function Deployment Notes
@@ -33,4 +33,3 @@ CREATE COLLECTION voyageops.eventing.sysdata;
 -- Suggested deploy order:
 --   1. Deploy incidentTimestamps first.
 --   2. Deploy guestIncidentTrigger second.
-

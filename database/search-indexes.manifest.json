@@ -1,0 +1,13 @@
+{
+  "bucket": "voyageops",
+  "deployOrder": ["voAgent_vector_playbooks_embedding"],
+  "indexes": [
+    {
+      "name": "voAgent_vector_playbooks_embedding",
+      "scope": "agent",
+      "collection": "playbooks",
+      "definitionFile": "database/search-indexes/voAgent_vector_playbooks_embedding.json",
+      "envVar": "CB_PLAYBOOK_VECTOR_INDEX"
+    }
+  ]
+}

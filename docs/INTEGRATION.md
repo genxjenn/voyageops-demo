@@ -204,7 +204,9 @@ CB_VECTOR_INDEX_DESC=              # Optional: override active index name for ve
 | `hyperscale_voGuestIncidentOpenAI_vector_type_incidents` | `vector_type_incidents` |
 | `hyperscale_voGuestIncidentOpenAI_vector_desc_incidents` | `vector_desc_incidents` |
 
-All are SQL++ GSI-style vector indexes (not FTS). Access via `APPROX_VECTOR_DISTANCE`. Do not use `cluster.search()` SDK calls.
+Incident indexes are SQL++ GSI-style (not FTS). Access via `APPROX_VECTOR_DISTANCE` in the Express API.
+
+**Playbook hybrid search (Python worker):** deploy the Couchbase **Search** index `voAgent_vector_playbooks_embedding` on `voyageops.agent.playbooks` via `npm run demo:setup-vector-indexes` on self-managed clusters (definition in `database/search-indexes/voAgent_vector_playbooks_embedding.json`). On **Capella**, import `database/search-indexes/voAgent_capella_import.json` in the UI (see [README.manual-setup.md](README.manual-setup.md)). Set `CB_PLAYBOOK_VECTOR_INDEX` to the short index name; the worker auto-resolves scoped Capella names such as `voyageops.agent.voAgent_vector_playbooks_embedding`. The worker uses `cluster.search()` with vector on `embedding` (term filters planned for hybrid NLS).
 
 ### Retrieval Response
 
@@ -261,7 +263,23 @@ db.policyRules           // voyageops.agent.policy_rules
 
 ---
 
-## 6. Capella Eventing Configuration
+## 6. Automated cluster setup (laptop scripts)
+
+From the repo root, with `.env` pointing at your cluster:
+
+| Command | Purpose |
+|---------|---------|
+| `npm run demo:setup-schema` | Run `database/core.scope.sql`, `agent.scope.sql`, `prepForEventing.sql` via Query Service |
+| `npm run demo:setup-eventing` | Deploy `incidentTimestamps` and `guest_recovery_trigger` from `database/eventing.manifest.json` |
+| `npm run demo:setup-vector-indexes` | GSI indexes (`create.vector.indexes.sql`) + Search hybrid playbook index (**after** seed scripts) |
+| `npm run demo:setup-search-indexes` | Search hybrid indexes only (playbooks; after `seed-agent-data`) |
+| `npm run demo:setup-cluster` | All of the above plus existing seed scripts in order |
+
+Manual Query Workbench / Capella UI steps are archived in [README.manual-setup.md](README.manual-setup.md).
+
+---
+
+## 7. Capella Eventing Configuration
 
 ### Function Settings
 
@@ -348,7 +366,7 @@ Successful runs write `action_proposals` and move `agent_runs.status` to `awaiti
 
 ---
 
-## 7. Agent Seed Data
+## 8. Agent Seed Data
 
 Before the agent service can generate quality proposals, run the seed script to populate the retrieval collections with embedded domain knowledge:
 
@@ -393,7 +411,7 @@ WITH {"dimension": 1536, "similarity": "L2", "description": "IVF,SQ8"};
 -- voyageops.eventing.sysdata is managed internally by Capella Eventing (no application index needed)
 
 
-## 8. Integration Points by File
+## 9. Integration Points by File
 
 ### `src/data/mockData.ts` — Data Layer
 | Mock Export | Couchbase Collection | Query Pattern |
@@ -487,7 +505,7 @@ CB_VECTOR_INDEX_DESC=        # Optional: override default index name
 
 ---
 
-## 9. Migration Steps
+## 10. Migration Steps
 
 ### Phase 1 — Infrastructure Setup
 
@@ -550,7 +568,7 @@ const { data: venues, isLoading } = useQuery({
 
 ---
 
-## 10. Query Reference
+## 11. Query Reference
 
 ### Dashboard KPIs (Analytics/Aggregation)
 ```sql
@@ -603,7 +621,7 @@ ORDER BY occupancyPct DESC;
 
 ---
 
-## 11. AI & NLP Integration
+## 12. AI & NLP Integration
 
 > **Status:** Guest Recovery RAG/chat path is live. Port Disruption and Onboard Ops do not yet have coded live LLM agents. Approval execution and outcomes write-back are still future work.
 
@@ -682,7 +700,7 @@ Open incident
 
 ---
 
-## 12. Real-Time Features
+## 13. Real-Time Features
 
 ### Eventing Service (Server & Capella)
 
@@ -727,7 +745,7 @@ await collection.mutateIn('venue::le-bordeaux', [
 
 ---
 
-## 13. Security & Connection Management
+## 14. Security & Connection Management
 
 ### Credential Storage
 - Store all Couchbase and OpenAI credentials server-side in the repo-root `.env` for local demo, or in deployment secrets for hosted environments
