@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { DocumentNotFoundError } from 'couchbase';
 import { initCouchbase, db } from '../src/lib/couchbase.ts';
 import {
   agentRecommendations,
@@ -147,36 +148,25 @@ async function seedKpis() {
 }
 
 async function loadExistingShipInfoBase() {
-  const bucketName = process.env.COUCHBASE_BUCKET || 'voyageops';
-  const result = await db.cluster.query(
-    `
-      SELECT META(s).id AS docId, s.*
-      FROM \`${bucketName}\`.intelligence.ship_info s
-      LIMIT 2
-    `,
-    { timeout: 10000 },
-  );
-
-  if (result.rows.length > 1) {
-    throw new Error('Expected a single document in voyageops.intelligence.ship_info');
-  }
-
-  if (result.rows.length === 1) {
-    const row = result.rows[0] as Record<string, unknown>;
-    const { docId, ...document } = row;
+  const defaultKey = 'ship_info::current';
+  try {
+    const doc = await db.shipInfo.get(defaultKey);
     return {
-      key: String(docId || 'ship_info::current'),
-      document,
+      key: defaultKey,
+      document: doc.content as Record<string, unknown>,
     };
+  } catch (error) {
+    if (error instanceof DocumentNotFoundError) {
+      return {
+        key: defaultKey,
+        document: {
+          shipId: 'IOS-001',
+          ...shipInfo,
+        },
+      };
+    }
+    throw error;
   }
-
-  return {
-    key: 'ship_info::current',
-    document: {
-      shipId: 'IOS-001',
-      ...shipInfo,
-    },
-  };
 }
 
 async function seedShipInfo() {

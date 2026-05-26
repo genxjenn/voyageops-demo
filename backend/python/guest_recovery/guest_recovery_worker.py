@@ -35,6 +35,7 @@ LOGGER = logging.getLogger(__name__)
 # same worker process, avoiding repeated round-trips for data that doesn't change.
 _verified_search_indexes: set[str] = set()
 _policy_rules_cache: list[dict[str, Any]] | None = None
+PLAYBOOK_SEARCH_SCOPE = "agent"
 
 
 def _emit_worker_metric(metric_name: str, **fields: Any) -> None:
@@ -318,28 +319,73 @@ def _find_playbook_id_from_context(cluster: Cluster, context: Mapping[str, Any])
     return playbook_id or None
 
 
-def _ensure_search_index_exists(cluster: Cluster, index_name: str) -> None:
-    # Skip the full metadata scan if we've already confirmed this index exists.
-    if index_name in _verified_search_indexes:
-        return
-
+def _list_search_index_names(cluster: Cluster) -> list[str]:
     try:
         indexes = cluster.search_indexes().get_all_indexes()
+        return sorted(idx.name for idx in indexes)
     except Exception as error:
-        raise AgentWorkerError("playbook_search", f"Unable to inspect search indexes: {error}") from error
+        LOGGER.debug("search_indexes inspection failed: %s", error)
+        return []
 
-    available_indexes = sorted(idx.name for idx in indexes)
-    if index_name not in available_indexes:
-        available_text = ", ".join(available_indexes) if available_indexes else "none"
-        raise AgentWorkerError(
-            "playbook_search",
-            (
-                f"Configured playbook index '{index_name}' was not found. "
-                f"Available search indexes: {available_text}. "
-                "Set CB_PLAYBOOK_VECTOR_INDEX to the correct index name or create the expected playbook vector index."
-            ),
+
+def _resolve_playbook_search_index_name(
+    configured_name: str,
+    available_indexes: list[str],
+    bucket_name: str,
+) -> str | None:
+    """Map CB_PLAYBOOK_VECTOR_INDEX to the name the cluster exposes (scoped on Capella 7.6+)."""
+    if configured_name in available_indexes:
+        return configured_name
+
+    scoped = f"{bucket_name}.{PLAYBOOK_SEARCH_SCOPE}.{configured_name}"
+    if scoped in available_indexes:
+        return scoped
+
+    suffix = f".{configured_name}"
+    candidates = [name for name in available_indexes if name.endswith(suffix)]
+    if not candidates:
+        return None
+
+    preferred_prefix = f"{bucket_name}.{PLAYBOOK_SEARCH_SCOPE}."
+    for name in candidates:
+        if name.startswith(preferred_prefix):
+            return name
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _find_playbook_id_via_gsi(
+    cluster: Cluster,
+    index_name: str,
+    incident_vector: list[float],
+) -> str:
+    query = f"""
+    SELECT META(p).id AS playbookId,
+           APPROX_VECTOR_DISTANCE(p.embedding, $vector, "L2") AS distance
+    FROM voyageops.agent.playbooks p
+    USE INDEX (`{index_name}` USING GSI)
+    WHERE p.active = true
+      AND p.embedding IS NOT MISSING
+    ORDER BY distance ASC
+    LIMIT 1
+    """
+
+    try:
+        result = cluster.query(
+            query,
+            QueryOptions(named_parameters={"vector": incident_vector}),
         )
-    _verified_search_indexes.add(index_name)
+        rows = list(result.rows())
+    except Exception as error:
+        raise AgentWorkerError("playbook_search", f"Playbook GSI vector search failed: {error}") from error
+
+    if not rows:
+        raise AgentWorkerError("playbook_search", "No matching playbook found for incident (GSI vector)")
+
+    playbook_id = str(rows[0].get("playbookId") or "").strip()
+    if not playbook_id:
+        raise AgentWorkerError("playbook_search", "GSI vector search did not return a playbook id")
+    _ensure_playbook_embedding_is_valid(cluster, playbook_id)
+    return playbook_id
 
 
 def _ensure_playbook_embedding_is_valid(cluster: Cluster, playbook_id: str) -> None:
@@ -374,30 +420,52 @@ def _ensure_playbook_embedding_is_valid(cluster: Cluster, playbook_id: str) -> N
         )
 
 
-def _find_playbook_id(cluster: Cluster, index_name: str, incident_vector: list[float]) -> str:
-    _ensure_search_index_exists(cluster, index_name)
+def _find_playbook_id(
+    cluster: Cluster,
+    index_name: str,
+    incident_vector: list[float],
+    bucket_name: str,
+) -> str:
+    available_indexes = _list_search_index_names(cluster)
+    fts_index_name = _resolve_playbook_search_index_name(index_name, available_indexes, bucket_name)
 
-    try:
-        request = search.SearchRequest.create(search.MatchAllQuery()).with_vector_search(
-            VectorSearch.from_vector_query(VectorQuery("embedding", incident_vector))
+    if fts_index_name:
+        _verified_search_indexes.add(fts_index_name)
+        try:
+            request = search.SearchRequest.create(search.MatchAllQuery()).with_vector_search(
+                VectorSearch.from_vector_query(VectorQuery("embedding", incident_vector))
+            )
+            search_result = cluster.search(
+                fts_index_name,
+                request,
+                SearchOptions(limit=1),
+            )
+            rows = list(search_result.rows())
+        except Exception as error:
+            raise AgentWorkerError("playbook_search", f"Playbook vector search failed: {error}") from error
+
+        if not rows:
+            raise AgentWorkerError("playbook_search", "No matching playbook found for incident")
+
+        playbook_id = getattr(rows[0], "id", None)
+        if not playbook_id:
+            raise AgentWorkerError("playbook_search", "Playbook search result did not include a document id")
+        _ensure_playbook_embedding_is_valid(cluster, str(playbook_id))
+        _emit_worker_metric(
+            "playbook_vector_source",
+            source="search_fts",
+            indexName=fts_index_name,
+            configuredIndexName=index_name,
         )
-        search_result = cluster.search(
-            index_name,
-            request,
-            SearchOptions(limit=1),
-        )
-        rows = list(search_result.rows())
-    except Exception as error:
-        raise AgentWorkerError("playbook_search", f"Playbook vector search failed: {error}") from error
+        return str(playbook_id)
 
-    if not rows:
-        raise AgentWorkerError("playbook_search", "No matching playbook found for incident")
-
-    playbook_id = getattr(rows[0], "id", None)
-    if not playbook_id:
-        raise AgentWorkerError("playbook_search", "Playbook search result did not include a document id")
-    _ensure_playbook_embedding_is_valid(cluster, str(playbook_id))
-    return str(playbook_id)
+    _emit_worker_metric(
+        "playbook_vector_source",
+        source="gsi_fallback",
+        indexName=index_name,
+        availableSearchIndexes=len(available_indexes),
+    )
+    return _find_playbook_id_via_gsi(cluster, index_name, incident_vector)
 
 
 def _fetch_actions_and_policies(cluster: Cluster, playbook_id: str, loyalty_tier: str) -> ActionPolicyLoadResult:
@@ -1112,7 +1180,12 @@ def run_guest_recovery_agent(
                     source="openai_runtime",
                     incidentId=str(context.get("incidentId") or ""),
                 )
-            playbook_id = _find_playbook_id(resolved_cluster, settings.playbook_index_name, incident_vector)
+            playbook_id = _find_playbook_id(
+                resolved_cluster,
+                settings.playbook_index_name,
+                incident_vector,
+                settings.couchbase_bucket,
+            )
         action_policy_result = _fetch_actions_and_policies(resolved_cluster, playbook_id, str(context["loyaltyTier"]))
         actions = action_policy_result.actions
         policies = action_policy_result.policies

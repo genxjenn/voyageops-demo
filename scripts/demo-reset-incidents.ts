@@ -12,6 +12,8 @@ type ResetArgs = {
   targetIncidentId?: string;
   shouldShowHelp: boolean;
   allowGlobalReset: boolean;
+  /** First-time setup: load incidents from data file when collection is empty (no purge). */
+  seedIfEmpty: boolean;
 };
 
 function getArgValue(argv: string[], key: string): string | undefined {
@@ -39,11 +41,12 @@ function parseArgs(argv: string[]): ResetArgs {
     targetIncidentId,
     shouldShowHelp: argv.includes('--help') || argv.includes('-h'),
     allowGlobalReset: argv.includes('--all'),
+    seedIfEmpty: argv.includes('--seed-if-empty'),
   };
 }
 
 function printUsage(): void {
-  console.log('Usage: npm run demo:reset-incidents -- [--incidentId <id>] [--requeue] [--all] [--rebuild-embeddings]');
+  console.log('Usage: npm run demo:reset-incidents -- [--incidentId <id>] [--requeue] [--all] [--seed-if-empty] [--rebuild-embeddings]');
   console.log('');
   console.log('Examples:');
   console.log('  Targeted reset + requeue one incident:');
@@ -51,7 +54,37 @@ function printUsage(): void {
   console.log('  Global reset (destructive) + requeue all open incidents:');
   console.log('    npm run demo:reset-incidents -- --all --requeue');
   console.log('');
-  console.log('Safety: Global reset now requires --all. Without --incidentId or --all, this script exits without changes.');
+  console.log('  First-time cluster seed (load incidents only when collection is empty):');
+  console.log('    npm run demo:reset-incidents -- --seed-if-empty');
+  console.log('');
+  console.log('Safety: Destructive reset requires --all. Without --incidentId, --all, or --seed-if-empty, this script exits without changes.');
+}
+
+async function runSeedIfEmptyFlow(): Promise<void> {
+  const incidentsExists = await collectionExists('guests', 'incidents');
+  if (!incidentsExists) {
+    console.log('Skipping incident seed: guests.incidents collection does not exist in this cluster.');
+    return;
+  }
+
+  const seeded = await seedIncidentsFromDataFileIfEmpty();
+  if (seeded > 0) {
+    console.log(`Seeded incidents from data/voyageops.guests.incidents: ${seeded}`);
+    const backfilled = await backfillIncidentEmbeddings(false);
+    if (backfilled > 0) {
+      console.log(`Backfilled embeddings for ${backfilled} incident(s).`);
+    }
+    const agentRunsExists = await collectionExists('agent', 'agent_runs');
+    if (agentRunsExists) {
+      const pending = await enqueueAllOpenIncidents();
+      console.log(`Enqueued guest-recovery pending runs (${pending} pending total).`);
+    }
+    return;
+  }
+
+  const count = await collectionCount('guests', 'incidents');
+  console.log(`Incidents collection already has ${count} document(s); no seed needed.`);
+  console.log('For a full reload: npm run demo:reset-incidents -- --all');
 }
 
 async function getEmbedding(text: string): Promise<number[]> {
@@ -420,8 +453,13 @@ async function main() {
     return;
   }
 
+  if (args.seedIfEmpty && !isTargeted && !args.allowGlobalReset) {
+    await runSeedIfEmptyFlow();
+    return;
+  }
+
   if (!isTargeted && !args.allowGlobalReset) {
-    console.log('No scope selected. Provide --incidentId <id> for targeted reset, or --all for global reset.');
+    console.log('No scope selected. Provide --incidentId <id> for targeted reset, --all for global reset, or --seed-if-empty for first-time load.');
     console.log('Run with --help for usage.');
     return;
   }

@@ -32,3 +32,4 @@ backend/python/guest_recovery/__pycache__/*
 backend/python/guest_recovery/__pyc*
 
 data/*2
+database/generated/
