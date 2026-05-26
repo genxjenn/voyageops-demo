@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Play, X, ChevronRight, ChevronLeft, LayoutDashboard, UserCheck,
-  Ship, Settings2, Sparkles, CheckCircle2, MessageSquare, Zap
+  Sparkles, CheckCircle2, MessageSquare, Zap
 } from "lucide-react";
 
 interface DemoQuery {
@@ -30,8 +30,8 @@ const demoSteps: DemoStep[] = [
     details: [
       "Live KPIs track guest satisfaction, revenue protection, and incident response",
       "Ship status bar shows vessel info, weather, and voyage progress",
-      "Agent workspace cards link directly to each AI agent with alert counts",
-      "Animated charts visualize satisfaction trends, revenue, and agent confidence",
+      "Guest Recovery workspace entry shows open incidents and pending actions",
+      "Charts visualize satisfaction trends, revenue protection, and recovery confidence",
     ],
   },
   {
@@ -49,40 +49,6 @@ const demoSteps: DemoStep[] = [
       "Automatically calculates compensation using sentiment analysis and guest value",
       "Presents prioritized recommendations with confidence scores",
       "Tracks full incident lifecycle from detection to resolution",
-    ],
-  },
-  {
-    title: "Port & Excursion Agent",
-    description: "Proactive management of port disruptions and excursion rebooking.",
-    route: "/port-disruption",
-    icon: Ship,
-    agentType: "port-disruption",
-    demoQueries: [
-      { label: "Santorini weather disruption", query: "Santorini weather disruption status" },
-      { label: "Show alternative excursions", query: "alternative excursions available" },
-    ],
-    details: [
-      "Integrates weather, port authority, and vendor data for disruption prediction",
-      "Auto-generates alternative excursion options when cancellations occur",
-      "Calculates financial impact and suggests revenue-preserving alternatives",
-      "Manages guest communications and rebooking workflows end-to-end",
-    ],
-  },
-  {
-    title: "Onboard Ops Agent",
-    description: "Real-time optimization of venue capacity, staffing, and maintenance.",
-    route: "/onboard-ops",
-    icon: Settings2,
-    agentType: "onboard-ops",
-    demoQueries: [
-      { label: "Dining capacity status", query: "Dining capacity status" },
-      { label: "Staff redeployment needed?", query: "staff redeployment recommendations" },
-    ],
-    details: [
-      "Live venue utilization monitoring with occupancy and wait-time tracking",
-      "Intelligent staff redeployment recommendations based on demand patterns",
-      "Predictive maintenance flagging to prevent service interruptions",
-      "Cross-venue load balancing to eliminate bottlenecks and overflows",
     ],
   },
 ];
@@ -220,7 +186,7 @@ export function GuidedDemo() {
                 </motion.div>
                 <h2 className="text-xl font-bold text-foreground mb-2">Demo Complete!</h2>
                 <p className="text-sm text-muted-foreground">
-                  You've explored all VoyageOps AI agentic capabilities.
+                  You've explored the VoyageOps Guest Recovery workflow.
                 </p>
               </motion.div>
             ) : (

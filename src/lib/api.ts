@@ -317,7 +317,7 @@ export const api = {
   venues: () => fetchJson<Venue[]>("/api/venues"),
   recommendations: (agentType?: string) =>
     fetchJson<AgentRecommendation[]>("/api/recommendations", { agentType }),
-  timeline: (agentType: "guest-recovery" | "port-disruption" | "onboard-ops") =>
+  timeline: (agentType: "guest-recovery") =>
     fetchJson<TimelineEvent[]>(`/api/timeline/${agentType}`),
   shipInfo: () => fetchJson<ShipInfo>("/api/ship-info"),
   guests: async () => {
@@ -327,7 +327,7 @@ export const api = {
   guestWithIncidents: (id: string) => fetchJson<GuestWithIncidents>(`/api/guests/${id}`),
   agentQuery: (
     query: string,
-    agentType: "guest-recovery" | "port-disruption" | "onboard-ops" | "general",
+    agentType: "guest-recovery" | "general",
     sessionId?: string,
   ) => postJson<AgentQueryResponse>("/api/agent-query", { query, agentType, sessionId }),
   actionProposals: (guestId?: string, incidentId?: string) =>
@@ -349,16 +349,12 @@ export function useLiveDashboardData() {
   const kpisQuery = useQuery({ queryKey: ["kpis"], queryFn: api.kpis });
   const shipInfoQuery = useQuery({ queryKey: ["shipInfo"], queryFn: api.shipInfo });
   const incidentsQuery = useQuery({ queryKey: ["incidents"], queryFn: () => api.incidents() });
-  const excursionsQuery = useQuery({ queryKey: ["excursions"], queryFn: api.excursions });
-  const venuesQuery = useQuery({ queryKey: ["venues"], queryFn: api.venues });
   const recommendationsQuery = useQuery({ queryKey: ["recommendations"], queryFn: () => api.recommendations() });
 
   return {
     kpisQuery,
     shipInfoQuery,
     incidentsQuery,
-    excursionsQuery,
-    venuesQuery,
     recommendationsQuery,
   };
 }

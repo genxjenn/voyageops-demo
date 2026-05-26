@@ -3,7 +3,7 @@ import { Send, Bot, User, Sparkles, Loader2, RotateCcw, Copy, Check, Activity } 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import ReactMarkdown from "react-markdown";
-import { guests as mockGuests, incidents as mockIncidents, excursions as mockExcursions, venues as mockVenues, agentRecommendations as mockRecommendations, shipInfo as mockShipInfo, type Guest, type Incident, type Excursion, type Venue, type AgentRecommendation } from "@/data/mockData";
+import { guests as mockGuests, incidents as mockIncidents, venues as mockVenues, agentRecommendations as mockRecommendations, shipInfo as mockShipInfo, type Guest, type Incident, type Venue, type AgentRecommendation } from "@/data/mockData";
 import { format } from "date-fns";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
@@ -20,7 +20,7 @@ interface ChatMessage {
 }
 
 interface AgentChatProps {
-  agentType?: "guest-recovery" | "port-disruption" | "onboard-ops" | "general";
+  agentType?: "guest-recovery" | "general";
   className?: string;
   onCommand?: (command: string) => void;
   onAgentResponse?: (payload: { query: string; result: AgentQueryResponse }) => void;
@@ -67,7 +67,7 @@ interface AgentChatProps {
 // │   - Calls LLM with retrieved context                                       │
 // │   - Returns structured response for UI rendering                           │
 // └─────────────────────────────────────────────────────────────────────────────┘
-const FALLBACK_RESPONSE = "I'm analyzing the available data but couldn't find a specific match for your query. Try asking about:\n\n- **Guest incidents** and recovery plans\n- **Port disruptions** and excursion status\n- **Venue capacity** and staffing\n- **Ship status** and recommendations\n\nFor example: *\"What's the status of the Santorini excursion?\"* or *\"Show me active incidents\"*";
+const FALLBACK_RESPONSE = "I'm analyzing the available data but couldn't find a specific match for your query. Try asking about:\n\n- **Guest incidents** and recovery plans\n- **Ship status** and voyage context\n- **Active recommendations** awaiting approval\n\nFor example: *\"Show me active incidents\"* or *\"Analyze Jane Doe's incident\"*";
 
 // ┌─────────────────────────────────────────────────────────────────────────────┐
 // │ COUCHBASE INTEGRATION: Query Routing Function                              │
@@ -91,7 +91,6 @@ const FALLBACK_RESPONSE = "I'm analyzing the available data but couldn't find a 
 interface LiveChatData {
   guests: Array<Guest | GuestProfile>;
   incidents: Array<Incident | IncidentRecord>;
-  excursions: Excursion[];
   venues: Venue[];
   recommendations: AgentRecommendation[];
   shipInfo: typeof mockShipInfo | ShipInfo;
@@ -258,24 +257,12 @@ function getAgentResponse(input: string, agentType: string, data: LiveChatData):
     }).join("\n\n")}`;
   }
 
-  if (agentType === "port-disruption" && /excursion|port|weather|disrupt|cancel/.test(text)) {
-    return `### Excursion Status\n\n| Excursion | Port | Status | Booked |\n|---|---|---|---|\n${data.excursions.map(e => `| ${e.name} | ${e.port} | \`${e.status}\` | ${e.booked}/${e.capacity} |`).join("\n")}`;
-  }
-
-  if (agentType === "onboard-ops" && /venue|capacity|staff|dining|pool|ops/.test(text)) {
-    const overloaded = data.venues.filter(v => v.status === "overloaded");
-    const busy = data.venues.filter(v => v.status === "busy");
-    return `### Venue Operations\n\n| Venue | Occupancy | Wait | Staff | Status |\n|---|---|---|---|---|\n${data.venues.map(v => `| ${v.name} | ${v.currentOccupancy}/${v.capacity} | ${v.waitTime}m | ${v.staffCount}/${v.optimalStaff} | \`${v.status}\` |`).join("\n")}\n\nOverloaded: **${overloaded.length}**\nBusy: **${busy.length}**`;
-  }
-
   return FALLBACK_RESPONSE;
 }
 
 const SUGGESTED_QUERIES: Record<string, string[]> = {
-  "general": ["Show ship status", "List active recommendations", "What incidents are open?"],
+  general: ["Show ship status", "List active recommendations", "What incidents are open?"],
   "guest-recovery": ["Analyze Jane Doe's incident", "Show Stark family recovery plan", "List all active incidents"],
-  "port-disruption": ["Santorini weather disruption status", "What happened with Crete excursion?", "Show all excursion status"],
-  "onboard-ops": ["Dining capacity status", "Pool deck and spa status", "Show all venue overview"],
 };
 
 function CopyButton({ content }: { content: string }) {
@@ -300,11 +287,14 @@ function CopyButton({ content }: { content: string }) {
 export function AgentChat({ agentType = "general", className, onCommand, onAgentResponse }: AgentChatProps) {
   const guestsQuery = useQuery({ queryKey: ["guests"], queryFn: api.guests });
   const incidentsQuery = useQuery({ queryKey: ["incidents"], queryFn: () => api.incidents() });
-  const excursionsQuery = useQuery({ queryKey: ["excursions"], queryFn: api.excursions });
-  const venuesQuery = useQuery({ queryKey: ["venues"], queryFn: api.venues });
+  const venuesQuery = useQuery({
+    queryKey: ["venues"],
+    queryFn: api.venues,
+    enabled: agentType !== "guest-recovery",
+  });
   const recommendationsQuery = useQuery({
     queryKey: ["recommendations", agentType],
-    queryFn: () => api.recommendations(),
+    queryFn: () => api.recommendations("guest-recovery"),
     enabled: agentType !== "guest-recovery",
   });
   const shipInfoQuery = useQuery({ queryKey: ["shipInfo"], queryFn: api.shipInfo });
@@ -312,9 +302,11 @@ export function AgentChat({ agentType = "general", className, onCommand, onAgent
   const liveData: LiveChatData = {
     guests: guestsQuery.data ?? mockGuests,
     incidents: incidentsQuery.data ?? mockIncidents,
-    excursions: excursionsQuery.data ?? mockExcursions,
     venues: venuesQuery.data ?? mockVenues,
-    recommendations: agentType === "guest-recovery" ? [] : (recommendationsQuery.data ?? mockRecommendations),
+    recommendations:
+      agentType === "guest-recovery"
+        ? []
+        : (recommendationsQuery.data ?? mockRecommendations).filter((r) => r.agentType === "guest-recovery"),
     shipInfo: shipInfoQuery.data ?? mockShipInfo,
   };
 
@@ -508,10 +500,8 @@ export function AgentChat({ agentType = "general", className, onCommand, onAgent
   }, [agentType]);
 
   const agentLabels: Record<string, string> = {
-    "general": "VoyageOps AI",
+    general: "VoyageOps AI",
     "guest-recovery": "Guest Recovery Agent",
-    "port-disruption": "Port Disruption Agent",
-    "onboard-ops": "Onboard Ops Agent",
   };
 
   const suggestions = SUGGESTED_QUERIES[agentType] || SUGGESTED_QUERIES["general"];

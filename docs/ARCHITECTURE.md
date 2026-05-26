@@ -42,13 +42,11 @@ VoyageOps AI is an AI-powered operational intelligence platform for cruise line 
 | Guest satisfaction recovery | ~60% | 89%+ |
 | Staff rebalancing | Shift-level (hours) | Real-time (minutes) |
 
-### Three AI Agents
+### Guest Recovery Agent
 
 | Agent | Domain | Trigger Examples |
 |---|---|---|
-| **Guest Service Recovery** | Detect service failures, correlate guest value, recommend compensation | Dining complaint + Platinum guest + high spend |
-| **Port & Excursion Disruption** | Monitor weather/vendor disruptions, coordinate rebooking | NOAA advisory + tendering risk + 142 affected guests |
-| **Onboard Operations Optimization** | Balance venue capacity, staffing, maintenance | 96% occupancy + 25% understaffing + growing wait time |
+| **Guest Recovery** | Detect service failures, correlate guest value, recommend compensation, run worker proposals | Dining complaint + Platinum guest + high spend; open incident Eventing → `agent_runs` |
 
 ---
 
@@ -72,7 +70,7 @@ VoyageOps AI is an AI-powered operational intelligence platform for cruise line 
 | **API Backend** | Express + Node.js SDK | `/api/*` routes, Couchbase access, Guest Recovery OpenAI chat/embedding calls |
 | **Worker Runtime** | Python + Couchbase SDK | Guest Recovery agent run polling and proposal generation |
 | **Database** | Couchbase Capella | Operational JSON documents, SQL++, Eventing, vector indexes |
-| **LLM** | OpenAI chat + embeddings | Live only for Guest Recovery; Port Disruption and Onboard Ops remain deterministic demo experiences |
+| **LLM** | OpenAI chat + embeddings | Guest Recovery chat and worker reasoning |
 
 ### Architecture Diagram
 
@@ -84,10 +82,9 @@ VoyageOps AI is an AI-powered operational intelligence platform for cruise line 
 │  │ AppLayout│  │  ┌──────────────────────────────┐    │ │
 │  │          │  │  │  Page Components              │    │ │
 │  │ • Dash   │  │  │  (Dashboard, GuestRecovery,   │    │ │
-│  │ • Guest  │  │  │   PortDisruption, OnboardOps, │    │ │
-│  │ • Port   │  │  │   Architecture)               │    │ │
-│  │ • Ops    │  │  └──────────────────────────────┘    │ │
-│  │ • Arch   │  │  ┌──────────────────────────────┐    │ │
+│  │ • Guest  │  │  │   Architecture)               │    │ │
+│  │ • Arch   │  │  └──────────────────────────────┘    │ │
+│  │          │  │  ┌──────────────────────────────┐    │ │
 │  │          │  │  │  AgentChat (NLP Interface)     │    │ │
 │  │ Agent    │  │  │  • Guest Recovery LLM chat     │    │ │
 │  │ Status   │  │  │  • Streaming simulation        │    │ │
@@ -122,7 +119,7 @@ VoyageOps AI is an AI-powered operational intelligence platform for cruise line 
 
 **Phase 1 (MVP):** Mock data in `src/data/mockData.ts`
 
-**Phase 2 (Active):** Live Couchbase backend with Guest Recovery LLM chat and worker-generated proposals. Port Disruption and Onboard Ops are still mock data only workspaces without coded LLM agents.
+**Phase 2 (Active):** Live Couchbase backend with Guest Recovery LLM chat and worker-generated proposals. The UI exposes Dashboard + Guest Recovery only; excursion/venue data may remain in Couchbase for context and seeds.
 
 The frontend remains unchanged — all fetch calls route through `/api/*` proxy to backend routes.
 
@@ -136,7 +133,7 @@ Frontend initialization:
 1. React Query wraps all async operations (ready for remote API)
 2. BrowserRouter establishes SPA routing
 3. AppLayout provides persistent sidebar navigation
-4. Each page component (Dashboard, GuestRecoveryAgent, etc.) dispatches API calls
+4. Each page component (Dashboard, GuestRecoveryAgent) dispatches API calls
 
 ### Backend Entry Point
 
@@ -155,8 +152,8 @@ npm run dev → Vite (port 5173) → /api/* proxy → src/api/server.ts → Expr
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/guest-recovery" element={<GuestRecoveryAgent />} />
-          <Route path="/port-disruption" element={<PortDisruptionAgent />} />
-          <Route path="/onboard-ops" element={<OnboardOpsAgent />} />
+          <Route path="/port-disruption" element={<Navigate to="/" replace />} />
+          <Route path="/onboard-ops" element={<Navigate to="/" replace />} />
           <Route path="/architecture" element={<Architecture />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
@@ -171,8 +168,8 @@ npm run dev → Vite (port 5173) → /api/* proxy → src/api/server.ts → Expr
 The `AppLayout` provides a persistent sidebar navigation with:
 
 - **Logo area** — VoyageOps AI branding with Anchor icon
-- **Navigation links** — 5 routes with active state highlighting using `NavLink`
-- **Agent status indicators** — 3 pulsing green dots showing agent health
+- **Navigation links** — Dashboard, Guest Recovery, Architecture
+- **Agent status indicator** — Guest Recovery health
 - **Collapse toggle** — Sidebar collapses from 240px to 64px (icon-only mode)
 - **Scrollable content area** — Main content with custom thin scrollbar
 
@@ -237,34 +234,11 @@ Each agent follows an identical structural pattern:
 
 **Unique data points:** Lifetime value, churn risk, first-complaint flag, policy constraints
 
-### Port & Excursion Disruption Agent (`/port-disruption`)
-
-> **LLM status:** No live LLM-backed Port Disruption agent is currently coded. This workspace uses deterministic/demo behavior and liveable data surfaces, not OpenAI-driven planning.
-
-**Context Panel:**
-- Active weather advisory (wind speed, sea state, cancellation probability)
-- 7-day itinerary status with per-port status badges
-- Impact summary (guests affected, revenue at risk, excursions impacted, high-value guests)
-
-**Unique data points:** NOAA forecast integration, tendering risk assessment, vendor cancellation handling
-
-### Onboard Operations Agent (`/onboard-ops`)
-
-> **LLM status:** No live LLM-backed Onboard Ops agent is currently coded. This workspace uses deterministic/demo behavior and operational UI patterns, not OpenAI-driven planning.
-
-**Context Panel:**
-- Venue utilization cards with occupancy bars (color-coded: green < 70%, yellow 70-90%, red > 90%)
-- Staff gap indicators (current vs. optimal staffing)
-- Wait time metrics per venue
-- Maintenance flags with priority and ETA
-
-**Unique data points:** Real-time sensor simulation, staff redeployment calculations, predictive capacity overflow
-
 ---
 
 ## 5. Data Model & Schema
 
-The application is now hybrid: Guest Recovery reads live Couchbase data through `/api/*`, while portions of Port Disruption and Onboard Ops still use demo/mock data. The TypeScript schemas continue to map directly to Couchbase JSON documents.
+Guest Recovery reads live Couchbase data through `/api/*`, with mock fallbacks in `mockData.ts` for dashboard KPIs and demo recommendations. TypeScript schemas map directly to Couchbase JSON documents.
 
 ### Entity Relationship Diagram
 
@@ -309,9 +283,9 @@ The application is now hybrid: Guest Recovery reads live Couchbase data through 
 | `Guest` | id, name, email, loyaltyTier, loyaltyNumber, cabinNumber, bookingId, onboardSpend, sailingHistory | GuestRecoveryAgent |
 | `Booking` | id, guestId, shipName, voyageNumber, departureDate, returnDate, cabinType, cabinNumber, totalValue, status | (Available for expansion) |
 | `Incident` | id, guestId, type, category, description, severity, status, createdAt, updatedAt | Dashboard, GuestRecoveryAgent |
-| `Excursion` | id, name, port, date, time, capacity, booked, pricePerPerson, status, vendor | PortDisruptionAgent |
-| `Venue` | id, name, type, deck, capacity, currentOccupancy, waitTime, staffCount, optimalStaff, status | OnboardOpsAgent |
-| `AgentRecommendation` | id, agentType, title, summary, reasoning, dataSourcesUsed[], confidence, impact, status, actions[], createdAt, relatedEntityId/Type | All agent pages, Dashboard |
+| `Excursion` | id, name, port, date, time, capacity, booked, pricePerPerson, status, vendor | Seed data / API (optional) |
+| `Venue` | id, name, type, deck, capacity, currentOccupancy, waitTime, staffCount, optimalStaff, status | GuestRecoveryAgent (context), seed |
+| `AgentRecommendation` | id, agentType, title, summary, reasoning, dataSourcesUsed[], confidence, impact, status, actions[], createdAt, relatedEntityId/Type | Dashboard, GuestRecoveryAgent |
 | `RecommendedAction` | id, label, type, estimatedValue, description | RecommendationCard |
 | `TimelineEvent` | id, timestamp, type, title, description, actor | AgentTimeline |
 | `OperationalKPI` | label, value, change, changeLabel, icon, trend | Dashboard KPICard |
@@ -342,8 +316,8 @@ The application is now hybrid: Guest Recovery reads live Couchbase data through 
 | Incidents | 4 | Dining complaint, AC failure, show cancellation, lost item |
 | Excursions | 4 | Santorini (disrupted), Mykonos (scheduled), Rhodes (scheduled), Crete (cancelled) |
 | Venues | 8 | Fine dining, casual, buffet, bar, pool, spa, theater, kids club |
-| Recommendations | 6 | 2 guest recovery, 2 port disruption, 2 onboard ops |
-| Timeline Events | 12 | 5 guest recovery, 4 port disruption, 3 onboard ops |
+| Recommendations | 2 | Guest recovery (Jane Doe, Stark family) |
+| Timeline Events | 5 | Guest recovery incident lifecycle |
 | KPIs | 6 | Recovery opportunities, disruptions mitigated, time saved, bottlenecks, revenue, satisfaction |
 
 ---
@@ -473,12 +447,12 @@ App
 │   └── Collapse Toggle
 ├── Dashboard
 │   ├── KPICard (×6)
-│   ├── Agent Workspace Cards (×3, linked)
+│   ├── Guest Recovery workspace entry
+│   ├── Guest Recovery snapshot
 │   ├── SatisfactionTrendsChart (AreaChart)
 │   ├── RevenueProtectedChart (BarChart)
 │   ├── AgentConfidenceChart (RadarChart)
 │   ├── Active Incidents List
-│   └── RecommendationCard (×3, pending)
 ├── GuestRecoveryAgent
 │   ├── Guest Profile Card
 │   ├── Active Incident Card
@@ -487,22 +461,6 @@ App
 │   ├── AgentTimeline (5 events)
 │   ├── Demo Scenario Card
 │   └── AgentChat (guest-recovery)
-├── PortDisruptionAgent
-│   ├── Weather Advisory Card
-│   ├── Itinerary Status (7 stops)
-│   ├── Impact Summary
-│   ├── Excursion Status Cards (×4)
-│   ├── RecommendationCard (×2)
-│   ├── AgentTimeline (4 events)
-│   ├── Demo Scenario Card
-│   └── AgentChat (port-disruption)
-├── OnboardOpsAgent
-│   ├── Venue Utilization Cards (×8)
-│   ├── Maintenance Flags (×3)
-│   ├── RecommendationCard (×2)
-│   ├── AgentTimeline (3 events)
-│   ├── Demo Scenario Card
-│   └── AgentChat (onboard-ops)
 ├── Architecture (technical docs page)
 └── GuidedDemo (floating overlay)
 ```
@@ -620,8 +578,7 @@ The `StatusBadge` component maps 18 status types to consistent color treatments:
 |---|---|---|
 | `/` | `Dashboard` | Operations command center with KPIs, charts, alerts |
 | `/guest-recovery` | `GuestRecoveryAgent` | Guest service recovery agent workspace |
-| `/port-disruption` | `PortDisruptionAgent` | Port & excursion disruption agent workspace |
-| `/onboard-ops` | `OnboardOpsAgent` | Onboard operations optimization agent workspace |
+| `/port-disruption`, `/onboard-ops` | — | Redirect to `/` (legacy URLs) |
 | `/architecture` | `Architecture` | Technical architecture documentation page |
 | `*` | `NotFound` | 404 fallback |
 
@@ -633,8 +590,6 @@ Defined in `AppLayout.tsx`:
 const navItems = [
   { label: "Dashboard",      to: "/",                icon: LayoutDashboard },
   { label: "Guest Recovery",  to: "/guest-recovery",  icon: UserCheck },
-  { label: "Port & Excursions", to: "/port-disruption", icon: Ship },
-  { label: "Onboard Ops",    to: "/onboard-ops",     icon: Settings2 },
   { label: "Architecture",   to: "/architecture",    icon: FileText },
 ];
 ```
@@ -702,7 +657,7 @@ This decoupled pattern avoids prop drilling and works across the component tree.
 
 For `guest-recovery`, `AgentChat` calls `api.agentQuery()` and renders the live LLM response. It also emits the full `AgentQueryResponse` to `GuestRecoveryAgent`, which stores chat-focused plans by incident ID.
 
-For non-Guest-Recovery agent types, the component supports deterministic demo responses through `getAgentResponse()`; no live LLM agent is wired for those workspaces yet.
+The `general` agent type uses deterministic demo responses through `getAgentResponse()` for exploration outside the recovery workspace.
 
 ### Streaming Simulation
 
@@ -713,9 +668,7 @@ Responses are revealed character-by-character at 3 chars per 12ms interval (~250
 | Agent | Queries |
 |---|---|
 | General | Ship status, Active recommendations, Open incidents |
-| Guest Recovery | Margaret Chen's incident, Rossi recovery plan, All active incidents |
-| Port Disruption | Santorini weather status, Crete excursion, All excursion status |
-| Onboard Ops | Dining capacity, Pool/spa status, All venue overview |
+| Guest Recovery | Jane Doe's incident, Stark family recovery plan, All active incidents |
 
 ### Guest Recovery Verbosity
 
@@ -733,14 +686,12 @@ Responses are revealed character-by-character at 3 chars per 12ms interval (~250
 
 ## 13. Guided Demo System
 
-### 4-Step Walkthrough
+### 2-Step Walkthrough
 
 | Step | Route | Demo Queries |
 |---|---|---|
 | 1. Operations Dashboard | `/` | (none — overview only) |
 | 2. Guest Recovery Agent | `/guest-recovery` | "Analyze Margaret Chen's incident", "Rossi suite AC critical" |
-| 3. Port & Excursion Agent | `/port-disruption` | "Santorini weather disruption status", "alternative excursions available" |
-| 4. Onboard Ops Agent | `/onboard-ops` | "Dining capacity status", "staff redeployment recommendations" |
 
 ### UX Flow
 
@@ -763,8 +714,8 @@ Responses are revealed character-by-character at 3 chars per 12ms interval (~250
 ### Phase 1 — MVP Demo
 
 - ✅ Full UI with mock data
-- ✅ 3 agent workspaces with context panels, recommendations, timelines
-- ✅ Guest Recovery live LLM chat, with deterministic demo responses still available for other agents
+- ✅ Guest Recovery workspace with context panels, recommendations, timeline
+- ✅ Guest Recovery live LLM chat; `general` chat mode uses deterministic fallback
 - ✅ Guided demo with live query injection
 - ✅ Responsive layout with collapsible sidebar
 - ✅ Rich data visualization (3 chart types)
@@ -781,7 +732,6 @@ Responses are revealed character-by-character at 3 chars per 12ms interval (~250
 | **Eventing** | Document change triggers for agent activation |
 | **Guest Recovery Chat** | Conversational LLM response with structured guidance and missing-artifact drafts |
 | **Worker Loop** | Python worker processes `agent_runs` and writes `action_proposals` |
-| **Port / Onboard LLMs** | Not implemented; current pages remain demo/deterministic experiences |
 | **Replication** | XDCR for multi-region fleet sync |
 
 ### Phase 3 — Approval, Execution, and Broader Agent Orchestration
@@ -873,15 +823,14 @@ Responses are revealed character-by-character at 3 chars per 12ms interval (~250
 
 ## 17. Appendix: File Inventory
 
-### Pages (5 files)
+### Pages (4 files)
 
 | File | Lines | Description |
 |---|---|---|
-| `src/pages/Dashboard.tsx` | 115 | Operations command center |
-| `src/pages/GuestRecoveryAgent.tsx` | 135 | Guest recovery agent workspace |
-| `src/pages/PortDisruptionAgent.tsx` | 151 | Port disruption agent workspace |
-| `src/pages/OnboardOpsAgent.tsx` | 118 | Onboard ops agent workspace |
-| `src/pages/Architecture.tsx` | 156 | Technical architecture page |
+| `src/pages/Dashboard.tsx` | — | Operations command center |
+| `src/pages/GuestRecoveryAgent.tsx` | — | Guest recovery agent workspace |
+| `src/pages/Architecture.tsx` | — | Technical architecture page |
+| `src/pages/NotFound.tsx` | — | 404 fallback |
 
 ### Components (8 custom + shadcn/ui)
 

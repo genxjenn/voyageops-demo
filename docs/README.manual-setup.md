@@ -4,11 +4,9 @@
 
 AI-powered operational intelligence platform for cruise line operations. Demonstrates how operational AI agents can use transactional and operational data to improve cruise-line operations.
 
-## Agents
+## Agent
 
-- **Guest Service Recovery Agent** — Detect service failures, correlate guest data, and recommend recovery actions (uses Couchbase for data)
-- **Port & Excursion Disruption Agent** — Monitor itinerary disruptions, assess impact, and coordinate rebooking (Mock Data only)
-- **Onboard Operations Optimization Agent** — Monitor venue demand, staffing, and maintenance to optimize guest experience (Mock Data only)
+- **Guest Recovery Agent** — Detect service failures, correlate guest data, recommend recovery actions, and run live LLM chat plus the Python worker (Couchbase + OpenAI)
 
 ## Tech Stack
 

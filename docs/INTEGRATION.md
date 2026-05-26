@@ -3,7 +3,7 @@
 > **Version:** 2.0 · **Last Updated:** April 2026  
 > **Purpose:** Backend wiring, agent scope, Guest Recovery vector retrieval/LLM chat, worker processing, and Capella Eventing configuration
 
-> **Status:** Phase 2 Active — Guest Recovery is the only coded live LLM agent. Port Disruption and Onboard Ops remain deterministic/demo workspaces.
+> **Status:** Phase 2 Active — Guest Recovery is the only agent workspace in the UI and the only live LLM + worker path.
 
 ---
 
@@ -43,10 +43,6 @@ React SPA → Vite /api/* proxy → Express (src/api/server.ts) → Couchbase SD
 - Agent scope: 7 collections, primary indexes, and 3 vector indexes
 - Capella Eventing function triggering on new open incidents
 - Seeded retrieval data (action_catalog, playbooks, policy_rules)
-
-**Not live as LLM agents yet:**
-- Port Disruption chat and recommendations are not backed by an OpenAI agent.
-- Onboard Ops chat and recommendations are not backed by an OpenAI agent.
 
 ---
 
@@ -182,7 +178,7 @@ WHERE status = "pending";
 
 ## Vector Retrieval \u2014 Incidents
 
-The `POST /api/agent-query` endpoint provides Guest Recovery semantic retrieval over `voyageops.guests.incidents`. It is not a shared live LLM endpoint for Port Disruption or Onboard Ops.
+The `POST /api/agent-query` endpoint provides Guest Recovery semantic retrieval over `voyageops.guests.incidents`. Only `agentType: guest-recovery` is accepted.
 
 ### Environment Variables
 
@@ -446,25 +442,6 @@ const { data: kpis } = useQuery({ queryKey: ['kpis'], queryFn: () =>
 //        WHERE i.status != 'closed'
 ```
 
-### `src/pages/PortDisruptionAgent.tsx` — Excursion & Weather Data
-```typescript
-// REPLACE: excursions, itinerary, weatherAdvisory
-// Capella/Server: SQL++ on excursions collection
-// Weather: External NOAA API cached in Couchbase with TTL
-// LLM status: no live OpenAI/LLM agent is coded for this workspace yet
-// Server:  Eventing triggers on weather document updates
-```
-
-### `src/pages/OnboardOpsAgent.tsx` — Venue & Staffing Data
-```typescript
-// REPLACE: venues, maintenance flags
-// Capella/Server: SQL++ on venues collection
-// IoT Updates: Sub-Document API for partial venue updates (occupancy, waitTime)
-//   Docs: https://docs.couchbase.com/nodejs-sdk/current/howtos/subdocument-operations.html
-// LLM status: no live OpenAI/LLM agent is coded for this workspace yet
-// Server:  Eventing for auto-alerts when occupancy > threshold
-```
-
 ### `src/components/AgentChat.tsx` — NLP Chat Interface (Live)
 
 The `guest-recovery` agent type now calls the live conversational endpoint:
@@ -534,13 +511,13 @@ The current implementation uses `src/api/server.ts` and `src/api/routes.ts`; the
 | `/api/guests/:id` | GET | KV get + SQL++ join incidents | GuestRecoveryAgent.tsx |
 | `/api/incidents` | GET | SQL++ with status/severity filters | Dashboard.tsx, GuestRecoveryAgent.tsx |
 | `/api/incidents/:id` | GET | SQL++ lookup + guest profile resolution | GuestRecoveryAgent.tsx |
-| `/api/excursions` | GET | SQL++ with status filter | PortDisruptionAgent.tsx |
-| `/api/venues` | GET | SQL++ ordered by occupancy | OnboardOpsAgent.tsx |
-| `/api/recommendations` | GET | SQL++ filtered by agentType | All agent pages |
+| `/api/excursions` | GET | SQL++ with status filter | Optional / seed data |
+| `/api/venues` | GET | SQL++ ordered by occupancy | GuestRecoveryAgent.tsx (context) |
+| `/api/recommendations` | GET | SQL++ filtered by agentType | Dashboard, Guest Recovery |
 | `/api/action-proposals` | GET | SQL++ filtered by guestId or incidentId | GuestRecoveryAgent.tsx |
 | `/api/recommendations/:id` | PATCH | Sub-Document mutateIn (status update) | RecommendationCard.tsx |
 | `/api/agent-query` | POST | Guest Recovery only: OpenAI embedding + SQL++ vector retrieval + OpenAI chat | AgentChat.tsx |
-| `/api/timeline/:agentType` | GET | SQL++ ordered by timestamp DESC | All agent pages |
+| `/api/timeline/:agentType` | GET | SQL++ ordered by timestamp DESC | Guest Recovery (`guest-recovery`) |
 
 ### Phase 3 — Frontend Migration
 
@@ -563,8 +540,7 @@ const { data: venues, isLoading } = useQuery({
 ### Phase 4 — Real-Time & AI
 
 - Enable Eventing Service for proactive alerts (Server) or Capella Eventing
-- Future work: extend the current Guest Recovery RAG/chat pattern to Port Disruption and Onboard Ops
-- Add WebSocket/SSE for live venue occupancy updates
+- Add WebSocket/SSE for live operational updates beyond worker logs
 
 ---
 
@@ -598,32 +574,11 @@ WHERE g.id = $guestId
 GROUP BY g;
 ```
 
-### Port Disruption — Affected Excursions
-```sql
-SELECT e.*, 
-       (e.pricePerPerson * e.booked) as revenueImpact,
-       CASE WHEN e.status = 'disrupted' THEN 'requires_action' ELSE e.status END as actionStatus
-FROM voyageops.excursions.excursions e
-WHERE e.status IN ['disrupted', 'cancelled']
-ORDER BY revenueImpact DESC;
-```
-
-### Onboard Ops — Venue Alerts with Staff Gaps
-```sql
-SELECT v.*,
-       ROUND((v.currentOccupancy / v.capacity) * 100, 1) as occupancyPct,
-       (v.optimalStaff - v.staffCount) as staffGap
-FROM voyageops.operations.venues v
-WHERE v.status IN ['busy', 'overloaded']
-   OR (v.optimalStaff - v.staffCount) > 0
-ORDER BY occupancyPct DESC;
-```
-
 ---
 
 ## 12. AI & NLP Integration
 
-> **Status:** Guest Recovery RAG/chat path is live. Port Disruption and Onboard Ops do not yet have coded live LLM agents. Approval execution and outcomes write-back are still future work.
+> **Status:** Guest Recovery RAG/chat path is live. Approval execution and outcomes write-back are still future work.
 
 ### What is in place
 
@@ -637,14 +592,6 @@ ORDER BY occupancyPct DESC;
 - **Structured guidance** returned to the frontend as playbook, policy-rule, action-catalog, operational, and missing-artifact recommendations
 - **Python worker** processing `agent_runs` and writing `action_proposals`
 - **Coverage gap handling** via `coverage_gap_drafts_ready` proposals when no eligible actions exist
-
-### LLM Agent Availability
-
-| Workspace | Live LLM Agent? | Notes |
-|---|---|---|
-| Guest Recovery | Yes | Uses `POST /api/agent-query`, OpenAI chat/embeddings, structured guidance, and the Python worker |
-| Port Disruption | No | Current behavior is deterministic/demo-oriented; future candidate for LLM orchestration |
-| Onboard Ops | No | Current behavior is deterministic/demo-oriented; future candidate for LLM orchestration |
 
 ### What is not yet implemented
 
@@ -714,7 +661,7 @@ function OnUpdate(doc, meta) {
     if (occupancyPct > 90) {
       // Insert alert into recommendations collection
       dst_collection['alert::' + meta.id] = {
-        agentType: 'onboard-ops',
+        agentType: 'guest-recovery',
         title: `${doc.name} at ${occupancyPct.toFixed(0)}% capacity`,
         status: 'pending',
         impact: 'high',
@@ -771,8 +718,6 @@ await collection.mutateIn('venue::le-bordeaux', [
 | `src/data/mockData.ts` | Static/demo exports | SQL++ queries via Express routes |
 | `src/pages/Dashboard.tsx` | `dashboardKPIs`, `incidents`, etc. | Analytics Service (KPIs), SQL++ (lists) |
 | `src/pages/GuestRecoveryAgent.tsx` | `guests[0]`, `incidents`, timeline | SQL++ JOIN, KV get |
-| `src/pages/PortDisruptionAgent.tsx` | `excursions`, `itinerary`, weather | SQL++, external API + cache |
-| `src/pages/OnboardOpsAgent.tsx` | `venues`, maintenance flags | SQL++, Sub-Document API (IoT) |
-| `src/components/AgentChat.tsx` | Pattern-matched responses | Capella AI Services / FTS + LLM |
+| `src/components/AgentChat.tsx` | Live `guest-recovery` chat; `general` demo fallback | OpenAI + vector retrieval / pattern-matched fallback |
 | `src/components/RecommendationCard.tsx` | Toast-only approve/reject | Sub-Document mutateIn |
 | `src/components/DashboardCharts.tsx` | Hardcoded chart data | Analytics Service aggregations |

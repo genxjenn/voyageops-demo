@@ -112,7 +112,7 @@ export interface Venue {
 
 export interface AgentRecommendation {
   id: string;
-  agentType: "guest-recovery" | "port-disruption" | "onboard-ops";
+  agentType: "guest-recovery";
   title: string;
   summary: string;
   reasoning: string;
@@ -489,79 +489,6 @@ export const agentRecommendations: AgentRecommendation[] = [
     relatedEntityId: "guest339",
     relatedEntityType: "guest",
   },
-  {
-    id: "REC-003",
-    agentType: "port-disruption",
-    title: "Santorini Port Weather Disruption",
-    summary: "High winds forecast for Santorini (March 16). Tendering operations at risk. 38 guests booked on Sunset Catamaran excursion. 4 additional shore excursions affected.",
-    reasoning: "Agent analyzed: NOAA maritime forecast (wind gusts 35-40 knots), port authority advisories, tender vessel specifications, excursion booking data, guest segment analysis (14 Platinum/Gold guests affected), and historical disruption patterns for Santorini. Similar conditions resulted in port cancellation 78% of the time in the past 3 years.",
-    dataSourcesUsed: ["Weather Service API", "Port Authority Feed", "Excursion Bookings", "Guest Segments", "Historical Disruption Data", "Revenue System"],
-    confidence: 87,
-    impact: "high",
-    status: "pending",
-    actions: [
-      { id: "A-008", label: "Pre-notify affected guests", type: "communication", description: "Send proactive in-app + cabin notification to 142 affected guests" },
-      { id: "A-009", label: "Activate rebooking for Mykonos alternatives", type: "rebooking", estimatedValue: 18500, description: "Offer Mykonos excursion upgrades at no additional cost" },
-      { id: "A-010", label: "Deploy onboard alternative programming", type: "operations", description: "Activate sea day entertainment package: cooking class, wine tasting, movie marathon" },
-      { id: "A-011", label: "Process automatic refunds", type: "refund", estimatedValue: 7182, description: "Auto-refund for cancelled Santorini excursions" },
-    ],
-    createdAt: "2024-03-15T20:00:00Z",
-    relatedEntityId: "EXC-501",
-    relatedEntityType: "excursion",
-  },
-  {
-    id: "REC-004",
-    agentType: "port-disruption",
-    title: "Crete Vendor Cancellation — Wine Experience",
-    summary: "Vendor 'Cretan Flavors Co.' cancelled Wine & Olive Experience (March 16) due to staffing issues. 25 guests fully booked, including 8 who pre-purchased premium packages.",
-    reasoning: "Agent analyzed: vendor communication logs, booking manifest, guest profiles, alternative vendor availability, and revenue impact ($3,625 in bookings, $1,200 in premium add-ons). Identified replacement vendor with 92% satisfaction rating.",
-    dataSourcesUsed: ["Vendor Management System", "Booking Data", "Guest Profiles", "Vendor Rating Database"],
-    confidence: 91,
-    impact: "medium",
-    status: "approved",
-    actions: [
-      { id: "A-012", label: "Rebook with 'Cretan Heritage Wines'", type: "rebooking", description: "Alternative vendor confirmed. Same itinerary, higher-rated guide." },
-      { id: "A-013", label: "Upgrade premium guests to private tour", type: "upgrade", estimatedValue: 640, description: "8 premium guests get private wine cave experience at no extra cost" },
-    ],
-    createdAt: "2024-03-15T11:30:00Z",
-    relatedEntityId: "EXC-504",
-    relatedEntityType: "excursion",
-  },
-  {
-    id: "REC-005",
-    agentType: "onboard-ops",
-    title: "Dining Capacity Crisis — Le Bordeaux & Lido",
-    summary: "Le Bordeaux at 96% capacity with 25% understaffing. Lido Buffet at 89% with growing wait times. Compass Bar underutilized at 43%. Recommend immediate staff rebalancing.",
-    reasoning: "Agent analyzed: real-time POS transactions, venue occupancy sensors, staff scheduling system, historical demand patterns (sea day peak = 18:00-20:30), and weather (outdoor venues limited). Predicted: Le Bordeaux will exceed capacity in 25 minutes. Lido wait times will reach 30+ minutes within 40 minutes.",
-    dataSourcesUsed: ["Venue Sensors", "POS System", "Staff Scheduling", "Weather Data", "Historical Patterns", "Guest Flow Analytics"],
-    confidence: 92,
-    impact: "high",
-    status: "pending",
-    actions: [
-      { id: "A-014", label: "Redeploy 4 staff from Compass Bar to Le Bordeaux", type: "staffing", description: "Move 2 servers + 2 runners from underutilized bar to fine dining" },
-      { id: "A-015", label: "Open overflow seating in Atlas Lounge", type: "operations", description: "Convert Atlas Lounge for casual dining overflow, deploy 3 buffet staff" },
-      { id: "A-016", label: "Push 'Compass Bar Happy Hour' notification", type: "demand-shaping", description: "Send targeted promo to guests in Lido queue to redirect 15-20% of traffic" },
-      { id: "A-017", label: "Extend Ocean Grill hours to 22:00", type: "operations", description: "Add late seating to absorb dinner demand wave" },
-    ],
-    createdAt: "2024-03-15T18:45:00Z",
-  },
-  {
-    id: "REC-006",
-    agentType: "onboard-ops",
-    title: "Pool Deck Overload + Maintenance Flag",
-    summary: "Sky Pool at 99% capacity. Main pool filtration system flagged for maintenance. Spa wait times at 45 minutes. Recommend load balancing and preventive maintenance scheduling.",
-    reasoning: "Agent analyzed: deck occupancy (148/150), pool system telemetry (filtration pressure +15% above normal), spa booking system, weather forecast (clear skies next 6 hours), and maintenance history (filter last serviced 12 days ago, recommended interval: 10 days).",
-    dataSourcesUsed: ["Deck Sensors", "Pool System Telemetry", "Spa Bookings", "Maintenance Logs", "Weather Data"],
-    confidence: 88,
-    impact: "medium",
-    status: "pending",
-    actions: [
-      { id: "A-018", label: "Schedule pool maintenance for 23:00", type: "maintenance", description: "Overnight filtration service to avoid guest disruption" },
-      { id: "A-019", label: "Open Deck 14 overflow pool area", type: "operations", description: "Deploy 4 attendants to secondary pool area" },
-      { id: "A-020", label: "Promote afternoon spa specials", type: "demand-shaping", description: "Redirect pool traffic with 20% off afternoon spa treatments" },
-    ],
-    createdAt: "2024-03-15T13:20:00Z",
-  },
 ];
 
 // ─── TIMELINE EVENTS ───
@@ -589,20 +516,6 @@ export const guestRecoveryTimeline: TimelineEvent[] = [
   { id: "T-003", timestamp: "2024-03-15T18:38:00Z", type: "info", title: "Venue Context Retrieved", description: "Le Bordeaux: 96% capacity, 4 staff below optimal. Average wait time: 35 min (normal: 8 min).", actor: "AI Agent" },
   { id: "T-004", timestamp: "2024-03-15T19:15:00Z", type: "recommendation", title: "Recovery Plan Generated", description: "4-action recovery plan created. Confidence: 94%. Estimated retention impact: $58,000+ lifetime value.", actor: "AI Agent" },
   { id: "T-005", timestamp: "2024-03-15T19:20:00Z", type: "action", title: "Under Review", description: "Recommendation forwarded to Guest Services Director for approval.", actor: "System" },
-];
-
-export const portDisruptionTimeline: TimelineEvent[] = [
-  { id: "T-010", timestamp: "2024-03-15T16:00:00Z", type: "alert", title: "Weather Advisory Received", description: "NOAA maritime forecast: Santorini area winds 35-40 knots expected March 16 06:00-18:00 local.", actor: "Weather Service" },
-  { id: "T-011", timestamp: "2024-03-15T16:05:00Z", type: "analysis", title: "Impact Analysis Started", description: "Port Disruption Agent initiated impact assessment across excursions, guest segments, and revenue.", actor: "AI Agent" },
-  { id: "T-012", timestamp: "2024-03-15T16:20:00Z", type: "info", title: "Guest Impact Mapped", description: "142 guests with Santorini excursions identified. 14 are Platinum/Gold tier. Total revenue at risk: $18,500.", actor: "AI Agent" },
-  { id: "T-013", timestamp: "2024-03-15T20:00:00Z", type: "recommendation", title: "Disruption Plan Generated", description: "4-action mitigation plan. Includes pre-notification, rebooking, onboard alternatives, and auto-refunds.", actor: "AI Agent" },
-];
-
-export const onboardOpsTimeline: TimelineEvent[] = [
-  { id: "T-020", timestamp: "2024-03-15T17:30:00Z", type: "alert", title: "Capacity Threshold Exceeded", description: "Le Bordeaux occupancy crossed 90% threshold. Staff-to-guest ratio below minimum.", actor: "Venue Sensors" },
-  { id: "T-021", timestamp: "2024-03-15T17:35:00Z", type: "analysis", title: "Fleet-wide Venue Analysis", description: "Ops Agent scanning all 8 venues for capacity, staffing, and demand patterns.", actor: "AI Agent" },
-  { id: "T-022", timestamp: "2024-03-15T17:45:00Z", type: "info", title: "Imbalance Detected", description: "Compass Bar at 43% occupancy with 2 excess staff. Le Bordeaux needs 4 additional staff immediately.", actor: "AI Agent" },
-  { id: "T-023", timestamp: "2024-03-15T18:45:00Z", type: "recommendation", title: "Rebalancing Plan Generated", description: "4-action operational plan: staff redeployment, overflow venue, demand shaping, extended hours.", actor: "AI Agent" },
 ];
 
 // ─── KPIs ───

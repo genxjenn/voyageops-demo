@@ -1,7 +1,7 @@
 import { NavLink, useLocation } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import {
-  LayoutDashboard, UserCheck, Ship, Settings2, Brain, ChevronLeft, ChevronRight, Anchor, FileText, Home
+  LayoutDashboard, UserCheck, ChevronLeft, ChevronRight, Anchor, FileText
 } from "lucide-react";
 import { useState } from "react";
 import { GuidedDemo } from "@/components/GuidedDemo";
@@ -13,16 +13,12 @@ import {
 const navItems = [
   { label: "Dashboard", to: "/", icon: LayoutDashboard },
   { label: "Guest Recovery", to: "/guest-recovery", icon: UserCheck },
-  { label: "Port & Excursions", to: "/port-disruption", icon: Ship },
-  { label: "Onboard Ops", to: "/onboard-ops", icon: Settings2 },
   { label: "Architecture", to: "/architecture", icon: FileText },
 ];
 
 const breadcrumbMap: Record<string, { label: string; parent?: string }> = {
   "/": { label: "Dashboard" },
   "/guest-recovery": { label: "Guest Recovery", parent: "/" },
-  "/port-disruption": { label: "Port & Excursions", parent: "/" },
-  "/onboard-ops": { label: "Onboard Ops", parent: "/" },
   "/architecture": { label: "Architecture", parent: "/" },
 };
 
@@ -87,12 +83,10 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         {!collapsed && (
           <div className="border-t border-border p-3 space-y-2">
             <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-medium">Agent Status</p>
-            {["Guest Recovery", "Port Disruption", "Onboard Ops"].map((agent) => (
-              <div key={agent} className="flex items-center gap-2">
-                <span className="h-1.5 w-1.5 rounded-full bg-success animate-pulse-glow" />
-                <span className="text-xs text-muted-foreground">{agent}</span>
-              </div>
-            ))}
+            <div className="flex items-center gap-2">
+              <span className="h-1.5 w-1.5 rounded-full bg-success animate-pulse-glow" />
+              <span className="text-xs text-muted-foreground">Guest Recovery</span>
+            </div>
           </div>
         )}
 

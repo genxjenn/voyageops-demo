@@ -2,12 +2,10 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AppLayout } from "@/components/AppLayout";
 import Dashboard from "./pages/Dashboard";
 import GuestRecoveryAgent from "./pages/GuestRecoveryAgent";
-import PortDisruptionAgent from "./pages/PortDisruptionAgent";
-import OnboardOpsAgent from "./pages/OnboardOpsAgent";
 import Architecture from "./pages/Architecture";
 import NotFound from "./pages/NotFound";
 
@@ -23,8 +21,8 @@ const App = () => (
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/guest-recovery" element={<GuestRecoveryAgent />} />
-            <Route path="/port-disruption" element={<PortDisruptionAgent />} />
-            <Route path="/onboard-ops" element={<OnboardOpsAgent />} />
+            <Route path="/port-disruption" element={<Navigate to="/" replace />} />
+            <Route path="/onboard-ops" element={<Navigate to="/" replace />} />
             <Route path="/architecture" element={<Architecture />} />
             <Route path="*" element={<NotFound />} />
           </Routes>

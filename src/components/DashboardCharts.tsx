@@ -29,13 +29,13 @@ const revenueData = [
   { day: "Day 10", protected: 142000, atRisk: 14000 },
 ];
 
-const agentConfidenceData = [
-  { metric: "Data Quality", guestRecovery: 94, portDisruption: 87, onboardOps: 92 },
-  { metric: "Prediction Accuracy", guestRecovery: 91, portDisruption: 83, onboardOps: 88 },
-  { metric: "Action Relevance", guestRecovery: 96, portDisruption: 90, onboardOps: 85 },
-  { metric: "Response Time", guestRecovery: 88, portDisruption: 92, onboardOps: 95 },
-  { metric: "Outcome Success", guestRecovery: 89, portDisruption: 78, onboardOps: 91 },
-  { metric: "Coverage", guestRecovery: 92, portDisruption: 85, onboardOps: 93 },
+const recoveryConfidenceData = [
+  { metric: "Data Quality", score: 94 },
+  { metric: "Prediction Accuracy", score: 91 },
+  { metric: "Action Relevance", score: 96 },
+  { metric: "Response Time", score: 88 },
+  { metric: "Outcome Success", score: 89 },
+  { metric: "Coverage", score: 92 },
 ];
 
 const tooltipStyle = {
@@ -87,7 +87,7 @@ export function RevenueProtectedChart() {
   return (
     <div className="rounded-lg border border-border bg-card p-4 animate-fade-in" style={{ animationDelay: "0.1s" }}>
       <h3 className="text-sm font-semibold text-foreground mb-1">Revenue Protection</h3>
-      <p className="text-xs text-muted-foreground mb-4">Cumulative revenue protected vs. at-risk by AI agents</p>
+      <p className="text-xs text-muted-foreground mb-4">Cumulative revenue protected vs. at-risk from recovery actions</p>
       <div className="h-[260px]">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={revenueData} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
@@ -108,19 +108,16 @@ export function RevenueProtectedChart() {
 export function AgentConfidenceChart() {
   return (
     <div className="rounded-lg border border-border bg-card p-4 animate-fade-in" style={{ animationDelay: "0.2s" }}>
-      <h3 className="text-sm font-semibold text-foreground mb-1">Agent Confidence Scores</h3>
-      <p className="text-xs text-muted-foreground mb-4">Performance metrics across all three AI agents</p>
+      <h3 className="text-sm font-semibold text-foreground mb-1">Recovery Agent Confidence</h3>
+      <p className="text-xs text-muted-foreground mb-4">Performance metrics for the Guest Recovery agent</p>
       <div className="h-[260px]">
         <ResponsiveContainer width="100%" height="100%">
-          <RadarChart cx="50%" cy="50%" outerRadius="70%" data={agentConfidenceData}>
+          <RadarChart cx="50%" cy="50%" outerRadius="70%" data={recoveryConfidenceData}>
             <PolarGrid stroke="hsl(215 15% 88%)" />
             <PolarAngleAxis dataKey="metric" tick={{ fontSize: 10, fill: "hsl(215 15% 45%)" }} />
             <PolarRadiusAxis angle={30} domain={[60, 100]} tick={{ fontSize: 9, fill: "hsl(215 15% 55%)" }} />
             <Tooltip {...tooltipStyle} />
-            <Legend wrapperStyle={{ fontSize: "11px" }} />
-            <Radar name="Guest Recovery" dataKey="guestRecovery" stroke="hsl(185 70% 45%)" fill="hsl(185 70% 45%)" fillOpacity={0.15} strokeWidth={2} />
-            <Radar name="Port Disruption" dataKey="portDisruption" stroke="hsl(38 92% 50%)" fill="hsl(38 92% 50%)" fillOpacity={0.1} strokeWidth={2} />
-            <Radar name="Onboard Ops" dataKey="onboardOps" stroke="hsl(152 60% 42%)" fill="hsl(152 60% 42%)" fillOpacity={0.1} strokeWidth={2} />
+            <Radar name="Guest Recovery" dataKey="score" stroke="hsl(185 70% 45%)" fill="hsl(185 70% 45%)" fillOpacity={0.2} strokeWidth={2} />
           </RadarChart>
         </ResponsiveContainer>
       </div>
