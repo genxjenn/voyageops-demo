@@ -765,7 +765,8 @@ const GuestRecoveryAgent = () => {
 
   useEffect(() => {
     setLastAdjustmentPrompt(null);
-  }, [selectedGuestId]);
+    setSelectedChatIncidentId(incidentIdForProposal ?? null);
+  }, [selectedGuestId, incidentIdForProposal]);
 
   return (
     <div className="p-6 space-y-6 max-w-[1400px] mx-auto">
@@ -779,7 +780,10 @@ const GuestRecoveryAgent = () => {
       {/* NLP Chat Interface */}
       <AgentChat
         agentType="guest-recovery"
-        className="h-[520px]"
+        heading="Guest Recovery Agent Log"
+        logCollapsible
+        defaultLogOpen
+        className="h-[340px]"
         onCommand={handleChatCommand}
         onAgentResponse={handleAgentResponse}
       />
@@ -1014,133 +1018,121 @@ const GuestRecoveryAgent = () => {
           </Tabs>
         </div>
 
-        {/* Right column — chat-focused incident: selector, LLM plan, full proposal cards for viewed incident */}
+        {/* Right column — focused incident: worker plan */}
         <div className="space-y-4">
           <div className="space-y-2">
-            <SectionTitle>Chat focus and plan</SectionTitle>
+            <SectionTitle>Incident Recovery Proposal</SectionTitle>
             <div className="rounded-lg border border-border bg-card p-4">
-              {recentChattedIncidents.length > 0 && (
-                <div className="mb-4 space-y-2 border-b border-border pb-4">
-                  <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Chat-focused incidents</p>
-                  {recentChattedIncidents.map(({ incidentId, incident: chatInc, guest: chatGuest }) => (
-                    <div key={incidentId} className="rounded-lg border border-border bg-muted/20 p-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="min-w-0 flex-1">
-                          <p className="text-xs font-mono text-muted-foreground">{incidentId}</p>
-                          <p className="text-sm font-semibold text-foreground mt-0.5">
-                            {chatInc ? (chatGuest?.fullName ?? chatGuest?.name ?? "Unknown Guest") : "Unknown Guest"}
-                          </p>
-                          {chatInc && (
-                            <div className="flex items-center gap-2 mt-1">
-                              <StatusBadge status={chatInc.severity} />
-                              <StatusBadge status={chatInc.status} />
-                            </div>
-                          )}
-                        </div>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant={selectedChatIncidentId === incidentId ? "default" : "outline"}
-                          className="shrink-0"
-                          onClick={() => setSelectedChatIncidentId(prev => prev === incidentId ? null : incidentId)}
-                        >
-                          {selectedChatIncidentId === incidentId ? "Viewing" : "View Plan"}
-                        </Button>
-                      </div>
-                      {chatInc && (
-                        <p className="mt-2 text-xs text-muted-foreground line-clamp-2">
-                          {chatInc.type}: {chatInc.category} — {chatInc.description}
+              {/* Plan header (LLM text removed; worker proposal only) */}
+              <p className="text-sm font-medium text-foreground">
+                {getGuestDisplayName((selectedChatFocusedEntry?.guest ?? guest) as GuestProfile)}
+              </p>
+              <div className="mt-2 flex items-center gap-2">
+                <StatusBadge status={(selectedChatFocusedEntry?.incident.severity ?? incident?.severity ?? "low") as any} />
+                <StatusBadge status={(selectedChatFocusedEntry?.incident.status ?? incident?.status ?? "open") as any} />
+              </div>
+
+              <div className="mt-4 space-y-4 border-t border-border pt-4">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Action proposal (viewed incident)
+                </p>
+
+                {selectedChatIncidentId ? (
+                  <>
+                    {chatFocusedProposalQuery.isLoading && (
+                      <p className="text-xs text-muted-foreground">Loading worker proposal…</p>
+                    )}
+                    {!chatFocusedProposalQuery.isLoading &&
+                      !showChatIncidentProposalPreview &&
+                      !focusedProposal && (
+                        <p className="text-xs text-muted-foreground leading-relaxed">
+                          No worker proposal for this incident yet. The worker creates one proposal per incident once processed.
                         </p>
                       )}
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {!selectedChatIncidentId ? (
-                <p className="text-xs text-muted-foreground leading-relaxed">
-                  {recentChattedIncidents.length > 0
-                    ? "Select “View Plan” on a chat-focused incident above, or ask chat about a specific incident ID."
-                    : "Ask chat about a specific incident ID to show the LLM-generated plan here."}
-                </p>
-              ) : selectedChatFocusedEntry ? (
+                    {showChatIncidentProposalPreview && adjustedProposalPreview && (
+                      <RecoveryProposalCard
+                        proposal={adjustedProposalPreview}
+                        approveMutation={approveMutation}
+                        showAlternatesForProposalCard={showAlternatesForProposalCard}
+                      />
+                    )}
+                    {focusedProposal && (
+                      <RecoveryProposalCard
+                        proposal={focusedProposal}
+                        approveMutation={approveMutation}
+                        showAlternatesForProposalCard={showAlternatesForProposalCard}
+                      />
+                    )}
+                  </>
+                ) : (
                   <>
-                    <p className="text-sm font-medium text-foreground">
-                      {selectedChatFocusedEntry.guest ? getGuestDisplayName(selectedChatFocusedEntry.guest) : "Unknown guest"}
-                    </p>
-                    <div className="mt-2 flex items-center gap-2">
-                      <StatusBadge status={selectedChatFocusedEntry.incident.severity} />
-                      <StatusBadge status={selectedChatFocusedEntry.incident.status} />
-                    </div>
-                    {selectedChatPlan ? (
-                      <>
-                        <p className="mt-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                          Latest Chat Plan
-                        </p>
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          Prompt: <span className="text-foreground">{selectedChatPlan.query}</span>
-                        </p>
-                        <div className="mt-3 max-h-80 overflow-y-auto rounded-lg border border-border bg-muted/20 p-3">
-                          <div className="prose prose-sm max-w-none prose-headings:text-foreground prose-p:text-foreground prose-strong:text-foreground prose-li:text-foreground prose-ul:my-2 prose-ol:my-2 text-xs">
-                            <ReactMarkdown>{selectedChatPlan.response}</ReactMarkdown>
-                          </div>
-                        </div>
-                        {selectedChatPlan.guidance?.missingArtifacts && selectedChatPlan.guidance.missingArtifacts.length > 0 && (
-                          <div className="mt-3 rounded-md border border-warning/25 bg-warning/5 p-2">
-                            <p className="text-[10px] font-semibold uppercase tracking-wider text-warning">
-                              Draft artifacts suggested by chat
-                            </p>
-                            <div className="mt-1.5 space-y-1">
-                              {selectedChatPlan.guidance.missingArtifacts.map((artifact, index) => (
-                                <p key={`${artifact.artifactType}-${index}`} className="text-[11px] text-muted-foreground leading-snug">
-                                  • <span className="text-foreground font-medium">{artifact.artifactType}</span>: {artifact.title}
-                                </p>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </>
-                    ) : (
-                      <p className="mt-3 text-xs text-muted-foreground">
-                        Ask chat about this incident to show the LLM-generated plan here.
+                    {proposalsQuery.isLoading && (
+                      <p className="text-xs text-muted-foreground">Loading worker proposal…</p>
+                    )}
+                    {!proposalsQuery.isLoading && !displayProposal && (
+                      <p className="text-xs text-muted-foreground leading-relaxed">
+                        No worker proposal for this guest/incident yet. The worker creates one proposal per incident once processed.
                       </p>
                     )}
-                    <div className="mt-4 space-y-4 border-t border-border pt-4">
-                      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                        Action proposal (viewed incident)
-                      </p>
-                      {chatFocusedProposalQuery.isLoading && (
-                        <p className="text-xs text-muted-foreground">Loading worker proposal…</p>
-                      )}
-                      {!chatFocusedProposalQuery.isLoading &&
-                        !showChatIncidentProposalPreview &&
-                        !focusedProposal && (
-                          <p className="text-xs text-muted-foreground leading-relaxed">
-                            No worker proposal for this incident yet. The worker creates one proposal per incident once processed.
+                    {displayProposal && (
+                      <RecoveryProposalCard
+                        proposal={displayProposal}
+                        approveMutation={approveMutation}
+                        showAlternatesForProposalCard={showAlternatesForProposalCard}
+                      />
+                    )}
+                  </>
+                )}
+              </div>
+
+              {recentChattedIncidents.length > 0 && (
+                <div className="mt-4 space-y-2 border-t border-border pt-4">
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Chat-focused incidents
+                  </p>
+                  <div className="space-y-2">
+                    {recentChattedIncidents.map(({ incidentId, incident: chatInc, guest: chatGuest }) => (
+                      <div key={incidentId} className="rounded-lg border border-border bg-muted/20 p-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="min-w-0 flex-1">
+                            <p className="text-xs font-mono text-muted-foreground">{incidentId}</p>
+                            <p className="text-sm font-semibold text-foreground mt-0.5">
+                              {chatInc ? (chatGuest?.fullName ?? chatGuest?.name ?? "Unknown Guest") : "Unknown Guest"}
+                              {chatGuest?.loyaltyTier ? (
+                                <span className="ml-2 text-xs font-medium text-warning">
+                                  ({chatGuest.loyaltyTier})
+                                </span>
+                              ) : null}
+                            </p>
+                            {chatInc && (
+                              <div className="flex items-center gap-2 mt-1">
+                                <StatusBadge status={chatInc.severity} />
+                                <StatusBadge status={chatInc.status} />
+                              </div>
+                            )}
+                          </div>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant={selectedChatIncidentId === incidentId ? "default" : "outline"}
+                            className="shrink-0"
+                            onClick={() => setSelectedChatIncidentId(prev => prev === incidentId ? null : incidentId)}
+                          >
+                            {selectedChatIncidentId === incidentId ? "Viewing" : "View Plan"}
+                          </Button>
+                        </div>
+                        {chatInc && (
+                          <p className="mt-2 text-xs text-muted-foreground line-clamp-2">
+                            {chatInc.type}: {chatInc.category} — {chatInc.description}
                           </p>
                         )}
-                      {showChatIncidentProposalPreview && adjustedProposalPreview && (
-                        <RecoveryProposalCard
-                          proposal={adjustedProposalPreview}
-                          approveMutation={approveMutation}
-                          showAlternatesForProposalCard={showAlternatesForProposalCard}
-                        />
-                      )}
-                      {focusedProposal && (
-                        <RecoveryProposalCard
-                          proposal={focusedProposal}
-                          approveMutation={approveMutation}
-                          showAlternatesForProposalCard={showAlternatesForProposalCard}
-                        />
-                      )}
-                    </div>
-                  </>
-              ) : (
-                <p className="text-xs text-muted-foreground">Loading incident context…</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               )}
             </div>
           </div>
-
         </div>
       </div>
     </div>

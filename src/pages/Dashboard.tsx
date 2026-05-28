@@ -31,20 +31,18 @@ import { useLiveDashboardData } from "@/lib/api";
 // └─────────────────────────────────────────────────────────────────────────────┘
 
 const Dashboard = () => {
-  const { kpisQuery, shipInfoQuery, incidentsQuery, recommendationsQuery } = useLiveDashboardData();
+  const { kpisQuery, shipInfoQuery, incidentsQuery, actionProposalsQuery } = useLiveDashboardData();
 
   const liveKpis = kpisQuery.data && kpisQuery.data.length > 0 ? kpisQuery.data : dashboardKPIs;
   const liveShipInfo = shipInfoQuery.data ?? mockShipInfo;
   const liveIncidents = incidentsQuery.data ?? mockIncidents;
-  const liveRecommendations = (recommendationsQuery.data ?? mockRecommendations).filter(
-    (r) => r.agentType === "guest-recovery",
-  );
+  const liveWorkerProposals = actionProposalsQuery.data ?? [];
 
   const activeIncidents = liveIncidents.filter(i => i.status !== "closed");
   const openOrReviewingIncidents = liveIncidents.filter(i => i.status === "open" || i.status === "reviewing");
   const highPriorityIncidents = activeIncidents.filter(i => i.severity === "critical" || i.severity === "high");
-  const guestRecoveryPendingActions = liveRecommendations.filter(
-    r => r.agentType === "guest-recovery" && r.status !== "executed",
+  const guestRecoveryPendingActions = liveWorkerProposals.filter(
+    (proposal) => proposal.status !== "executed" && proposal.status !== "rejected",
   ).length;
 
   return (
@@ -119,7 +117,7 @@ const Dashboard = () => {
                 <p className="mt-1 text-lg font-semibold text-foreground">{activeIncidents.length}</p>
               </div>
               <div className="rounded bg-muted p-3">
-                <span className="text-muted-foreground">Pending Actions</span>
+                <span className="text-muted-foreground">Pending Proposals</span>
                 <p className="mt-1 text-lg font-semibold text-foreground">{guestRecoveryPendingActions}</p>
               </div>
             </div>

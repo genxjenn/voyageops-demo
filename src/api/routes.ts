@@ -600,7 +600,7 @@ async function runPlanAdjustmentLlm(params: {
   contextBundle.chatMemory.relatedChatMessageDocIds.forEach((messageId) => availableCitationIds.add(String(messageId)));
 
   const validated = validatePlanAdjustmentPayload(parsed, allowedActionIds, availableCitationIds, {
-    incidentType: contextBundle.incident.type,
+    incidentType,
     hasDefinedActions,
     hasDefinedPlaybooks,
   });
@@ -1018,7 +1018,7 @@ function slimActionCatalogForLlm(action: any) {
   };
 }
 
-function slimChatTurnForLlm(turn: ChatTurn, maxMessageLen = LLM_TEXT_TRUNC.turnMessage) {
+function slimChatTurnForLlm(turn: ChatTurn, maxMessageLen: number = LLM_TEXT_TRUNC.turnMessage) {
   return {
     role: turn.role,
     message: truncateForLlm(turn.message, maxMessageLen),

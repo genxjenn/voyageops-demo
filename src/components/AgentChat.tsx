@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Send, Bot, User, Sparkles, Loader2, RotateCcw, Copy, Check, Activity } from "lucide-react";
+import { Send, Bot, User, Sparkles, Loader2, RotateCcw, Copy, Check, Activity, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import ReactMarkdown from "react-markdown";
 import { guests as mockGuests, incidents as mockIncidents, venues as mockVenues, agentRecommendations as mockRecommendations, shipInfo as mockShipInfo, type Guest, type Incident, type Venue, type AgentRecommendation } from "@/data/mockData";
@@ -22,6 +23,9 @@ interface ChatMessage {
 interface AgentChatProps {
   agentType?: "guest-recovery" | "general";
   className?: string;
+  heading?: string;
+  logCollapsible?: boolean;
+  defaultLogOpen?: boolean;
   onCommand?: (command: string) => void;
   onAgentResponse?: (payload: { query: string; result: AgentQueryResponse }) => void;
 }
@@ -284,7 +288,16 @@ function CopyButton({ content }: { content: string }) {
   );
 }
 
-export function AgentChat({ agentType = "general", className, onCommand, onAgentResponse }: AgentChatProps) {
+export function AgentChat({
+  agentType = "general",
+  className,
+  heading,
+  logCollapsible = false,
+  defaultLogOpen = true,
+  onCommand,
+  onAgentResponse,
+}: AgentChatProps) {
+  const [logOpen, setLogOpen] = useState(defaultLogOpen);
   const guestsQuery = useQuery({ queryKey: ["guests"], queryFn: api.guests });
   const incidentsQuery = useQuery({ queryKey: ["incidents"], queryFn: () => api.incidents() });
   const venuesQuery = useQuery({
@@ -397,6 +410,12 @@ export function AgentChat({ agentType = "general", className, onCommand, onAgent
     scrollToBottom();
   }, [messages, scrollToBottom]);
 
+  useEffect(() => {
+    if (logOpen) {
+      scrollToBottom();
+    }
+  }, [logOpen, scrollToBottom]);
+
   const simulateStreaming = useCallback((fullText: string, msgId: string, onComplete?: () => void) => {
     setIsStreaming(true);
     let charIndex = 0;
@@ -490,28 +509,48 @@ export function AgentChat({ agentType = "general", className, onCommand, onAgent
   };
 
   const suggestions = SUGGESTED_QUERIES[agentType] || SUGGESTED_QUERIES["general"];
+  const displayHeading = heading ?? agentLabels[agentType];
 
-  return (
-    <div className={cn("flex flex-col rounded-xl border border-border bg-card overflow-hidden", className)}>
-      {/* Header */}
-      <div className="flex items-center gap-3 border-b border-border px-4 py-3 bg-muted/30">
-        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10">
-          <Bot className="h-4 w-4 text-primary" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-foreground">{agentLabels[agentType]}</p>
-          <p className="text-[10px] text-muted-foreground">
-            Powered by Couchbase Capella AI Services • Natural Language Interface
-          </p>
-        </div>
+  const rootClassName = cn(
+    "flex flex-col rounded-xl border border-border bg-card overflow-hidden",
+    logCollapsible ? (logOpen ? className : undefined) : className,
+  );
+
+  const headerRow = (
+    <>
+      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+        <Bot className="h-4 w-4 text-primary" />
+      </div>
+      <div className="flex-1 min-w-0 text-left">
+        <p className="text-sm font-semibold text-foreground">{displayHeading}</p>
+        <p className="text-[10px] text-muted-foreground">
+          Powered by Couchbase Capella AI Services • Natural Language Interface
+        </p>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
         <div className="flex items-center gap-1.5">
           <span className="h-2 w-2 rounded-full bg-success animate-pulse" />
           <span className="text-[10px] text-success font-medium">Online</span>
         </div>
+        {logCollapsible && (
+          <ChevronDown
+            className={cn(
+              "h-4 w-4 text-muted-foreground transition-transform duration-200",
+              logOpen && "rotate-180",
+            )}
+          />
+        )}
       </div>
+    </>
+  );
 
-      {/* Messages */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-thin min-h-[300px] max-h-[500px]">
+  const messagesPanelClassName = cn(
+    "overflow-y-auto p-4 space-y-4 scrollbar-thin",
+    logCollapsible ? "h-full min-h-0" : "flex-1 min-h-[300px] max-h-[500px]",
+  );
+
+  const messagesPanel = (
+      <div ref={scrollRef} className={messagesPanelClassName}>
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-center py-8">
             <div className="h-12 w-12 rounded-2xl bg-primary/10 flex items-center justify-center mb-3">
@@ -654,9 +693,10 @@ export function AgentChat({ agentType = "general", className, onCommand, onAgent
           </div>
         )}
       </div>
+  );
 
-      {/* Input */}
-      <div className="border-t border-border p-3">
+  const inputPanel = (
+      <div className="shrink-0 border-t border-border p-3">
         <div className="flex gap-2">
           {messages.length > 0 && (
             <Button
@@ -689,6 +729,35 @@ export function AgentChat({ agentType = "general", className, onCommand, onAgent
           </Button>
         </div>
       </div>
-    </div>
+  );
+
+  if (!logCollapsible) {
+    return (
+      <div className={rootClassName}>
+        <div className="flex items-center gap-3 border-b border-border px-4 py-3 bg-muted/30">
+          {headerRow}
+        </div>
+        {messagesPanel}
+        {inputPanel}
+      </div>
+    );
+  }
+
+  return (
+    <Collapsible open={logOpen} onOpenChange={setLogOpen} className={rootClassName}>
+      <CollapsibleTrigger asChild>
+        <button
+          type="button"
+          aria-label="Toggle agent message log"
+          className="flex w-full shrink-0 items-center gap-3 border-b border-border px-4 py-3 bg-muted/30 hover:bg-muted/40 transition-colors"
+        >
+          {headerRow}
+        </button>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="flex-1 min-h-0 overflow-hidden data-[state=closed]:hidden">
+        {messagesPanel}
+      </CollapsibleContent>
+      {inputPanel}
+    </Collapsible>
   );
 }

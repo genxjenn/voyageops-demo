@@ -350,11 +350,13 @@ export function useLiveDashboardData() {
   const shipInfoQuery = useQuery({ queryKey: ["shipInfo"], queryFn: api.shipInfo });
   const incidentsQuery = useQuery({ queryKey: ["incidents"], queryFn: () => api.incidents() });
   const recommendationsQuery = useQuery({ queryKey: ["recommendations"], queryFn: () => api.recommendations() });
+  const actionProposalsQuery = useQuery({ queryKey: ["action-proposals"], queryFn: () => api.actionProposals() });
 
   return {
     kpisQuery,
     shipInfoQuery,
     incidentsQuery,
     recommendationsQuery,
+    actionProposalsQuery,
   };
 }
