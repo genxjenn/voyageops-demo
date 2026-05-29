@@ -91,6 +91,58 @@ interface ChatFocusedIncidentEntry {
   guest?: GuestProfile;
 }
 
+function FocusedIncidentCard({
+  incident,
+  guest,
+  title = "Focused incident",
+}: {
+  incident: IncidentRecord;
+  guest?: GuestProfile;
+  title?: string;
+}) {
+  return (
+    <div className="rounded-lg border border-destructive/30 bg-card p-4">
+      <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-2">
+        <MessageSquare className="h-3.5 w-3.5 text-destructive" />
+        {title}
+      </h2>
+      {guest && (
+        <p className="text-sm font-medium text-foreground mb-2">
+          {getGuestDisplayName(guest)}
+          {guest.loyaltyTier ? (
+            <span className="ml-2 text-xs font-medium text-warning">({guest.loyaltyTier})</span>
+          ) : null}
+        </p>
+      )}
+      <div className="flex items-center gap-2 mb-2 flex-wrap">
+        <span className="text-xs font-mono text-muted-foreground">{getIncidentIdentifier(incident)}</span>
+        <StatusBadge status={incident.severity} />
+        <StatusBadge status={incident.status} />
+      </div>
+      <p className="text-sm font-medium text-foreground">
+        {incident.type}: {incident.category}
+      </p>
+      <p className="mt-1.5 text-xs text-muted-foreground leading-relaxed">{incident.description}</p>
+      <div className="mt-3 flex gap-4 text-xs text-muted-foreground">
+        <span>
+          Reported:{" "}
+          {parseTimestamp(incident.createdAt).toLocaleTimeString("en-US", {
+            hour: "2-digit",
+            minute: "2-digit",
+          })}
+        </span>
+        <span>
+          Updated:{" "}
+          {parseTimestamp(incident.updatedAt).toLocaleTimeString("en-US", {
+            hour: "2-digit",
+            minute: "2-digit",
+          })}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 type BadgeStatus = Parameters<typeof StatusBadge>[0]["status"];
 const BADGE_STATUSES: BadgeStatus[] = [
   "open",
@@ -705,6 +757,15 @@ const GuestRecoveryAgent = () => {
     : undefined;
   const selectedChatPlan = selectedChatIncidentId ? chatFocusedPlansByIncidentId[selectedChatIncidentId] : undefined;
 
+  const planFocusIncident = selectedChatIncidentId
+    ? selectedChatFocusedEntry?.incident ?? findIncidentAcrossSources(selectedChatIncidentId)
+    : incident;
+  const planFocusGuest = selectedChatIncidentId
+    ? selectedChatFocusedEntry?.guest
+      ?? findGuestById(guests, planFocusIncident?.guestId)
+      ?? guest
+    : guest;
+
   const handleChatCommand = (command: string) => {
     const normalized = command.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
     let nextSelectedGuestId = selectedGuestId;
@@ -1023,14 +1084,17 @@ const GuestRecoveryAgent = () => {
           <div className="space-y-2">
             <SectionTitle>Incident Recovery Proposal</SectionTitle>
             <div className="rounded-lg border border-border bg-card p-4">
-              {/* Plan header (LLM text removed; worker proposal only) */}
-              <p className="text-sm font-medium text-foreground">
-                {getGuestDisplayName((selectedChatFocusedEntry?.guest ?? guest) as GuestProfile)}
-              </p>
-              <div className="mt-2 flex items-center gap-2">
-                <StatusBadge status={(selectedChatFocusedEntry?.incident.severity ?? incident?.severity ?? "low") as any} />
-                <StatusBadge status={(selectedChatFocusedEntry?.incident.status ?? incident?.status ?? "open") as any} />
-              </div>
+              {planFocusIncident ? (
+                <FocusedIncidentCard
+                  incident={planFocusIncident}
+                  guest={planFocusGuest}
+                  title={selectedChatIncidentId ? "Chat-focused incident" : "Active incident"}
+                />
+              ) : selectedChatIncidentId ? (
+                <p className="text-xs text-muted-foreground">Loading incident context…</p>
+              ) : (
+                <p className="text-sm text-muted-foreground">No incident selected for this guest.</p>
+              )}
 
               <div className="mt-4 space-y-4 border-t border-border pt-4">
                 <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
