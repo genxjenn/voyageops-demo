@@ -1,10 +1,15 @@
 import { KPICard } from "@/components/KPICard";
 import { PageTitle, SubsectionTitle, SectionSubtitle } from "@/components/PageHeading";
 import { SatisfactionTrendsChart, RevenueProtectedChart, AgentConfidenceChart } from "@/components/DashboardCharts";
-import { dashboardKPIs, shipInfo as mockShipInfo, incidents as mockIncidents, agentRecommendations as mockRecommendations } from "@/data/mockData";
+import { dashboardKPIs, shipInfo as mockShipInfo, incidents as mockIncidents } from "@/data/mockData";
 import { Ship, MapPin, Users, Anchor, Cloud, Waves, ArrowRight, UserCheck } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useLiveDashboardData } from "@/lib/api";
+
+function isPendingWorkerProposal(status: string | undefined) {
+  const normalized = String(status ?? "").toLowerCase();
+  return normalized !== "approved" && normalized !== "executed" && normalized !== "rejected";
+}
 
 // ┌─────────────────────────────────────────────────────────────────────────────┐
 // │ COUCHBASE INTEGRATION: Dashboard Data Loading                              │
@@ -33,7 +38,6 @@ import { useLiveDashboardData } from "@/lib/api";
 const Dashboard = () => {
   const { kpisQuery, shipInfoQuery, incidentsQuery, actionProposalsQuery } = useLiveDashboardData();
 
-  const liveKpis = kpisQuery.data && kpisQuery.data.length > 0 ? kpisQuery.data : dashboardKPIs;
   const liveShipInfo = shipInfoQuery.data ?? mockShipInfo;
   const liveIncidents = incidentsQuery.data ?? mockIncidents;
   const liveWorkerProposals = actionProposalsQuery.data ?? [];
@@ -41,9 +45,17 @@ const Dashboard = () => {
   const activeIncidents = liveIncidents.filter(i => i.status !== "closed");
   const openOrReviewingIncidents = liveIncidents.filter(i => i.status === "open" || i.status === "reviewing");
   const highPriorityIncidents = activeIncidents.filter(i => i.severity === "critical" || i.severity === "high");
-  const guestRecoveryPendingActions = liveWorkerProposals.filter(
-    (proposal) => proposal.status !== "executed" && proposal.status !== "rejected",
+  const guestRecoveryPendingActions = liveWorkerProposals.filter((proposal) =>
+    isPendingWorkerProposal(proposal.status),
   ).length;
+
+  const baseKpis = kpisQuery.data && kpisQuery.data.length > 0 ? kpisQuery.data : dashboardKPIs;
+  const liveKpis = baseKpis.map((kpi) => {
+    if (kpi.label === "Guest Recovery Opportunities") {
+      return { ...kpi, value: openOrReviewingIncidents.length };
+    }
+    return kpi;
+  });
 
   return (
     <div className="p-6 max-w-[1400px] mx-auto">

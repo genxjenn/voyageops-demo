@@ -6,7 +6,7 @@ import { useQuery, useQueries, useQueryClient, useMutation } from "@tanstack/rea
 import { toast } from "sonner";
 import { api, type AgentQueryResponse, type GuestProfile, type IncidentRecord, type ActionProposal, type ActionProposalAction, type PrioritizedIncident } from "@/lib/api";
 import { parseTimestamp } from "@/lib/utils";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -227,6 +227,49 @@ function getSeverityPriority(severity: string | undefined) {
     .replace(/[^a-z]/g, "");
 
   return order[normalized] ?? 0;
+}
+
+function isActionableIncidentStatus(status: string | undefined) {
+  const normalized = String(status ?? "").toLowerCase();
+  return normalized === "open" || normalized === "reviewing" || normalized === "pending";
+}
+
+function isPendingProposal(proposal: ActionProposal) {
+  const normalized = String(proposal.status ?? "").toLowerCase();
+  return normalized !== "approved" && normalized !== "executed" && normalized !== "rejected";
+}
+
+function compareIncidentsBySeverityRecency(a: IncidentRecord, b: IncidentRecord) {
+  const severityDelta = getSeverityPriority(b.severity) - getSeverityPriority(a.severity);
+  if (severityDelta !== 0) return severityDelta;
+  return parseTimestamp(b.updatedAt).getTime() - parseTimestamp(a.updatedAt).getTime();
+}
+
+function pickProposalForIncident(proposals: ActionProposal[], incidentId: string | undefined) {
+  if (!incidentId) return undefined;
+  const scopeId = normalizeIncidentIdForAlternatesScope(incidentId);
+  const forIncident = proposals.filter(
+    (proposal) => normalizeIncidentIdForAlternatesScope(proposal.incidentId) === scopeId,
+  );
+  return forIncident.find(isPendingProposal);
+}
+
+function pickActionableIncidentForGuest(
+  selectedGuestId: string,
+  guestIncidents: IncidentRecord[],
+  topRanked: PrioritizedIncident[],
+): IncidentRecord | undefined {
+  const rankedForGuest = topRanked.filter(
+    ({ incident }) =>
+      incident.guestId === selectedGuestId && isActionableIncidentStatus(incident.status),
+  );
+  if (rankedForGuest.length > 0) {
+    return rankedForGuest[0].incident;
+  }
+
+  const actionable = guestIncidents.filter((inc) => isActionableIncidentStatus(inc.status));
+  if (actionable.length === 0) return undefined;
+  return actionable.slice().sort(compareIncidentsBySeverityRecency)[0];
 }
 
 const LOWER_COST_DEMO_FALLBACK: ActionProposalAction[] = [
@@ -529,6 +572,7 @@ const GuestRecoveryAgent = () => {
   const [chattedIncidentIds, setChattedIncidentIds] = useState<string[]>([]);
   const [selectedChatIncidentId, setSelectedChatIncidentId] = useState<string | null>(null);
   const [chatFocusedPlansByIncidentId, setChatFocusedPlansByIncidentId] = useState<Record<string, ChatFocusedPlan>>({});
+  const lastSyncedGuestIdRef = useRef("");
 
   const guestsQuery = useQuery({ queryKey: ["guests"], queryFn: api.guests });
   const guests = guestsQuery.data ?? [];
@@ -550,9 +594,15 @@ const GuestRecoveryAgent = () => {
         input.proposalId,
         input.chatPreviewOverlay ? { chatPreviewOverlay: input.chatPreviewOverlay } : undefined,
       ),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["incidents", "prioritized", "guest-recovery"] });
-      queryClient.invalidateQueries({ queryKey: ["action-proposals"] });
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["incidents"] }),
+        queryClient.invalidateQueries({ queryKey: ["incidents", "prioritized", "guest-recovery"] }),
+        queryClient.invalidateQueries({ queryKey: ["incidents", selectedGuestId] }),
+        queryClient.invalidateQueries({ queryKey: ["action-proposals"] }),
+        queryClient.invalidateQueries({ queryKey: ["proposals", selectedGuestId] }),
+        queryClient.invalidateQueries({ queryKey: ["proposals", "chat-focused"] }),
+      ]);
       toast.success("Action plan approved", { description: "The recovery plan has been queued for execution." });
     },
     onError: (error) => {
@@ -567,16 +617,11 @@ const GuestRecoveryAgent = () => {
   const venues = venuesQuery.data ?? [];
   const nonClosedIncidents = incidents.filter(inc => String(inc.status).toLowerCase() !== "closed");
   const closedIncidents = incidents.filter(inc => inc.status === "closed");
-  const incident = nonClosedIncidents
-    .slice()
-    .sort((a, b) => {
-      const severityDelta = getSeverityPriority(b.severity) - getSeverityPriority(a.severity);
-      if (severityDelta !== 0) return severityDelta;
-
-      const updatedA = parseTimestamp(a.updatedAt).getTime();
-      const updatedB = parseTimestamp(b.updatedAt).getTime();
-      return updatedB - updatedA;
-    })[0] ?? incidents[0];
+  const actionableIncidents = incidents.filter((inc) => isActionableIncidentStatus(inc.status));
+  const incident =
+    (selectedGuestId
+      ? pickActionableIncidentForGuest(selectedGuestId, incidents, topRankedIncidents)
+      : undefined) ?? actionableIncidents.slice().sort(compareIncidentsBySeverityRecency)[0] ?? incidents[0];
   const incidentIdForProposal = incident ? getIncidentIdentifier(incident) : undefined;
   const proposalsQuery = useQuery({
     queryKey: ["proposals", selectedGuestId],
@@ -590,8 +635,6 @@ const GuestRecoveryAgent = () => {
     enabled: Boolean(selectedChatIncidentId),
     refetchInterval: 10000,
   });
-  const focusedProposal = (chatFocusedProposalQuery.data ?? [])[0];
-
   const topGuestIds = Array.from(
     new Set(
       topRankedIncidents
@@ -622,39 +665,79 @@ const GuestRecoveryAgent = () => {
     ?? topGuestOptions[0]?.guest
     ?? guests[0]
     ?? EMPTY_GUEST;
-  const openIncidentIds = new Set(nonClosedIncidents.map((inc) => getIncidentIdentifier(inc)));
-  const openIncidentProposals = (proposalsQuery.data ?? []).filter((proposal) => openIncidentIds.has(proposal.incidentId));
-  const selectedProposal = incidentIdForProposal
-    ? openIncidentProposals.find((proposal) => proposal.incidentId === incidentIdForProposal) ?? openIncidentProposals[0]
-    : openIncidentProposals[0];
+  const actionableIncidentIds = new Set(actionableIncidents.map((inc) => getIncidentIdentifier(inc)));
+  const proposalPool = proposalsQuery.data ?? [];
+  const chatFocusedProposals = chatFocusedProposalQuery.data ?? [];
+  const proposalPoolWithChatFocus =
+    chatFocusedProposals.length === 0
+      ? proposalPool
+      : [
+        ...proposalPool,
+        ...chatFocusedProposals.filter(
+          (proposal) => !proposalPool.some((existing) => existing.proposalId === proposal.proposalId),
+        ),
+      ];
+  const openIncidentProposals = proposalPool.filter((proposal) =>
+    actionableIncidentIds.has(proposal.incidentId),
+  );
+  const pendingOpenIncidentProposals = openIncidentProposals.filter(isPendingProposal);
 
-  const adjustmentPromptIncidentIds = lastAdjustmentPrompt ? extractIncidentIdsFromCommand(lastAdjustmentPrompt) : [];
-  const adjustmentTargetIncidentId = adjustmentPromptIncidentIds[0] ?? selectedChatIncidentId ?? null;
   const findIncidentAcrossSources = (id: string): IncidentRecord | undefined =>
     incidents.find((i) => getIncidentIdentifier(i) === id)
     ?? topRankedIncidents.map(({ incident: ri }) => ri).find((i) => getIncidentIdentifier(i) === id)
     ?? allIncidents.find((i) => getIncidentIdentifier(i) === id);
 
+  const rawFocusIncidentId = selectedChatIncidentId ?? incidentIdForProposal;
+  const rawFocusIncident = rawFocusIncidentId
+    ? findIncidentAcrossSources(rawFocusIncidentId)
+    : undefined;
+  const effectivePlanIncidentId = selectedChatIncidentId ?? incidentIdForProposal;
+  const effectivePlanIncident = effectivePlanIncidentId
+    ? findIncidentAcrossSources(effectivePlanIncidentId)
+    : undefined;
+
+  const adjustmentPromptIncidentIds = lastAdjustmentPrompt ? extractIncidentIdsFromCommand(lastAdjustmentPrompt) : [];
+  const adjustmentTargetIncidentId = adjustmentPromptIncidentIds[0] ?? selectedChatIncidentId ?? null;
+  const adjustmentTargetsEffective = Boolean(
+    adjustmentTargetIncidentId &&
+    effectivePlanIncidentId &&
+    normalizeIncidentIdForAlternatesScope(adjustmentTargetIncidentId) ===
+      normalizeIncidentIdForAlternatesScope(effectivePlanIncidentId),
+  );
+
   const incidentForChatAdjustment =
-    (adjustmentTargetIncidentId ? findIncidentAcrossSources(adjustmentTargetIncidentId) : undefined) ?? incident;
+    (adjustmentTargetsEffective && adjustmentTargetIncidentId
+      ? findIncidentAcrossSources(adjustmentTargetIncidentId)
+      : undefined) ?? effectivePlanIncident ?? incident;
   const proposalForChatAdjustment =
-    (adjustmentTargetIncidentId
-      ? openIncidentProposals.find((p) => p.incidentId === adjustmentTargetIncidentId)
-        ?? (focusedProposal?.incidentId === adjustmentTargetIncidentId ? focusedProposal : undefined)
-      : undefined) ?? selectedProposal;
+    pickProposalForIncident(proposalPoolWithChatFocus, effectivePlanIncidentId)
+    ?? (adjustmentTargetsEffective
+      ? pickProposalForIncident(proposalPoolWithChatFocus, adjustmentTargetIncidentId)
+      : undefined);
 
   const adjustedProposalPreview = buildChatAdjustedProposal(
     proposalForChatAdjustment,
     incidentForChatAdjustment,
     lastAdjustmentPrompt,
   );
-  const displayProposal = adjustedProposalPreview ?? selectedProposal;
-  const visibleProposals = adjustedProposalPreview
+  const planDisplayProposalBase = pickProposalForIncident(
+    proposalPoolWithChatFocus,
+    effectivePlanIncidentId,
+  );
+  const chatFocusedPlan = effectivePlanIncidentId
+    ? chatFocusedPlansByIncidentId[effectivePlanIncidentId]
+    : undefined;
+  const planDisplayProposal =
+    adjustmentTargetsEffective && adjustedProposalPreview
+      ? adjustedProposalPreview
+      : planDisplayProposalBase;
+  const displayProposal = planDisplayProposal;
+  const visibleProposals = adjustedProposalPreview && adjustmentTargetsEffective
     ? [
       adjustedProposalPreview,
-      ...openIncidentProposals.filter((p) => p.proposalId !== proposalForChatAdjustment?.proposalId),
+      ...pendingOpenIncidentProposals.filter((p) => p.proposalId !== proposalForChatAdjustment?.proposalId),
     ]
-    : openIncidentProposals;
+    : pendingOpenIncidentProposals;
   const incidentSeverityById = new Map(
     incidents.map((inc) => [getIncidentIdentifier(inc), String(inc.severity ?? "unknown").toLowerCase()]),
   );
@@ -694,13 +777,6 @@ const GuestRecoveryAgent = () => {
     showWorkerAlternatesUi &&
     (proposal.interactive?.alternativeActions?.length ?? 0) > 0 &&
     alternatesScopeIncidentIds.has(normalizeIncidentIdForAlternatesScope(proposal.incidentId));
-  const showChatIncidentProposalPreview =
-    Boolean(
-      adjustedProposalPreview &&
-      selectedChatIncidentId &&
-      normalizeIncidentIdForAlternatesScope(adjustedProposalPreview.incidentId) ===
-        normalizeIncidentIdForAlternatesScope(selectedChatIncidentId),
-    );
   const severityOrder = ["critical", "high", "medium", "low", "unknown"] as const;
   const proposalsBySeverity = severityOrder
     .map((severity) => ({
@@ -755,16 +831,18 @@ const GuestRecoveryAgent = () => {
   const selectedChatFocusedEntry = selectedChatIncidentId
     ? chatFocusedIncidents.find((entry) => entry.incidentId === selectedChatIncidentId)
     : undefined;
-  const selectedChatPlan = selectedChatIncidentId ? chatFocusedPlansByIncidentId[selectedChatIncidentId] : undefined;
-
-  const planFocusIncident = selectedChatIncidentId
-    ? selectedChatFocusedEntry?.incident ?? findIncidentAcrossSources(selectedChatIncidentId)
-    : incident;
-  const planFocusGuest = selectedChatIncidentId
-    ? selectedChatFocusedEntry?.guest
-      ?? findGuestById(guests, planFocusIncident?.guestId)
-      ?? guest
-    : guest;
+  const planFocusIncident = effectivePlanIncident;
+  const planFocusGuest =
+    (effectivePlanIncidentId
+      ? findGuestById(guests, effectivePlanIncident?.guestId)
+        ?? rankedGuestByIncidentId.get(effectivePlanIncidentId)
+      : undefined) ?? guest;
+  const planProposalLoading =
+    proposalsQuery.isLoading
+    || (Boolean(selectedChatIncidentId)
+      && chatFocusedProposalQuery.isFetching
+      && !planDisplayProposal
+      && !chatFocusedPlan);
 
   const handleChatCommand = (command: string) => {
     const normalized = command.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
@@ -825,6 +903,10 @@ const GuestRecoveryAgent = () => {
   };
 
   useEffect(() => {
+    if (!selectedGuestId) return;
+    const guestChanged = lastSyncedGuestIdRef.current !== selectedGuestId;
+    if (!guestChanged) return;
+    lastSyncedGuestIdRef.current = selectedGuestId;
     setLastAdjustmentPrompt(null);
     setSelectedChatIncidentId(incidentIdForProposal ?? null);
   }, [selectedGuestId, incidentIdForProposal]);
@@ -843,7 +925,7 @@ const GuestRecoveryAgent = () => {
         agentType="guest-recovery"
         heading="Guest Recovery Agent Log"
         logCollapsible
-        defaultLogOpen
+        defaultLogOpen={false}
         className="h-[340px]"
         onCommand={handleChatCommand}
         onAgentResponse={handleAgentResponse}
@@ -1088,12 +1170,32 @@ const GuestRecoveryAgent = () => {
                 <FocusedIncidentCard
                   incident={planFocusIncident}
                   guest={planFocusGuest}
-                  title={selectedChatIncidentId ? "Chat-focused incident" : "Active incident"}
+                  title={
+                    effectivePlanIncidentId &&
+                    selectedChatIncidentId &&
+                    normalizeIncidentIdForAlternatesScope(effectivePlanIncidentId) ===
+                      normalizeIncidentIdForAlternatesScope(selectedChatIncidentId)
+                      ? "Chat-focused incident"
+                      : "Active incident"
+                  }
                 />
               ) : selectedChatIncidentId ? (
                 <p className="text-xs text-muted-foreground">Loading incident context…</p>
               ) : (
-                <p className="text-sm text-muted-foreground">No incident selected for this guest.</p>
+                <p className="text-sm text-muted-foreground">No open incident selected for this guest.</p>
+              )}
+
+              {selectedChatIncidentId &&
+                rawFocusIncident &&
+                !isActionableIncidentStatus(rawFocusIncident.status) &&
+                effectivePlanIncidentId &&
+                normalizeIncidentIdForAlternatesScope(selectedChatIncidentId) !==
+                  normalizeIncidentIdForAlternatesScope(effectivePlanIncidentId) && (
+                <p className="mt-3 text-xs text-muted-foreground leading-relaxed rounded-md border border-border bg-muted/30 p-2">
+                  Showing the pending recovery plan for{" "}
+                  <span className="font-mono text-foreground">{effectivePlanIncidentId}</span>{" "}
+                  (current open incident). The selected chat incident is already approved.
+                </p>
               )}
 
               <div className="mt-4 space-y-4 border-t border-border pt-4">
@@ -1101,51 +1203,33 @@ const GuestRecoveryAgent = () => {
                   Action proposal (viewed incident)
                 </p>
 
-                {selectedChatIncidentId ? (
-                  <>
-                    {chatFocusedProposalQuery.isLoading && (
-                      <p className="text-xs text-muted-foreground">Loading worker proposal…</p>
-                    )}
-                    {!chatFocusedProposalQuery.isLoading &&
-                      !showChatIncidentProposalPreview &&
-                      !focusedProposal && (
-                        <p className="text-xs text-muted-foreground leading-relaxed">
-                          No worker proposal for this incident yet. The worker creates one proposal per incident once processed.
-                        </p>
-                      )}
-                    {showChatIncidentProposalPreview && adjustedProposalPreview && (
-                      <RecoveryProposalCard
-                        proposal={adjustedProposalPreview}
-                        approveMutation={approveMutation}
-                        showAlternatesForProposalCard={showAlternatesForProposalCard}
-                      />
-                    )}
-                    {focusedProposal && (
-                      <RecoveryProposalCard
-                        proposal={focusedProposal}
-                        approveMutation={approveMutation}
-                        showAlternatesForProposalCard={showAlternatesForProposalCard}
-                      />
-                    )}
-                  </>
-                ) : (
-                  <>
-                    {proposalsQuery.isLoading && (
-                      <p className="text-xs text-muted-foreground">Loading worker proposal…</p>
-                    )}
-                    {!proposalsQuery.isLoading && !displayProposal && (
-                      <p className="text-xs text-muted-foreground leading-relaxed">
-                        No worker proposal for this guest/incident yet. The worker creates one proposal per incident once processed.
-                      </p>
-                    )}
-                    {displayProposal && (
-                      <RecoveryProposalCard
-                        proposal={displayProposal}
-                        approveMutation={approveMutation}
-                        showAlternatesForProposalCard={showAlternatesForProposalCard}
-                      />
-                    )}
-                  </>
+                {planProposalLoading && (
+                  <p className="text-xs text-muted-foreground">Loading worker proposal…</p>
+                )}
+                {!planProposalLoading && !planDisplayProposal && chatFocusedPlan && (
+                  <div className="rounded-md border border-primary/20 bg-primary/5 p-3 space-y-2">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-primary">
+                      Agent recovery plan (from chat)
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Query: <span className="text-foreground">{chatFocusedPlan.query}</span>
+                    </p>
+                    <div className="prose prose-sm dark:prose-invert max-w-none text-xs text-foreground">
+                      <ReactMarkdown>{chatFocusedPlan.response}</ReactMarkdown>
+                    </div>
+                  </div>
+                )}
+                {!planProposalLoading && !planDisplayProposal && !chatFocusedPlan && (
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    No pending worker proposal for this open incident yet. The worker creates one proposal per incident once processed.
+                  </p>
+                )}
+                {!planProposalLoading && planDisplayProposal && (
+                  <RecoveryProposalCard
+                    proposal={planDisplayProposal}
+                    approveMutation={approveMutation}
+                    showAlternatesForProposalCard={showAlternatesForProposalCard}
+                  />
                 )}
               </div>
 
@@ -1180,7 +1264,7 @@ const GuestRecoveryAgent = () => {
                             size="sm"
                             variant={selectedChatIncidentId === incidentId ? "default" : "outline"}
                             className="shrink-0"
-                            onClick={() => setSelectedChatIncidentId(prev => prev === incidentId ? null : incidentId)}
+                            onClick={() => setSelectedChatIncidentId(incidentId)}
                           >
                             {selectedChatIncidentId === incidentId ? "Viewing" : "View Plan"}
                           </Button>

@@ -355,14 +355,40 @@ export function AgentChat({
     if (agentType !== "guest-recovery") return;
 
     const apiBase = import.meta.env.VITE_API_URL ?? "";
+    let cancelled = false;
+    let sse: EventSource | null = null;
 
-    // Seed with recent history before opening the stream
+    const attachStream = () => {
+      sse = new EventSource(`${apiBase}/api/worker-logs/stream`);
+      sse.onmessage = (event) => {
+        try {
+          const entry = JSON.parse(event.data);
+          if (entry?.type === "connected" || !entry?.id) return;
+          if (seenLogIds.current.has(entry.id)) return;
+          seenLogIds.current.add(entry.id);
+          const msg: ChatMessage = {
+            id: `activity-${entry.id}`,
+            role: "activity",
+            content: entry.message,
+            timestamp: new Date(entry.ts),
+            activityLevel: entry.level ?? "info",
+          };
+          setMessages(prev => [...prev, msg]);
+        } catch { /* ignore malformed events */ }
+      };
+    };
+
+    // Seed history and open SSE only when the API is reachable (avoids proxy spam if API is down)
     fetch(`${apiBase}/api/worker-logs`)
-      .then(r => r.json())
-      .then((entries: Array<{id: string; ts: string; level: string; message: string}>) => {
+      .then((r) => {
+        if (!r.ok) throw new Error(`worker-logs ${r.status}`);
+        return r.json();
+      })
+      .then((entries: Array<{ id: string; ts: string; level: string; message: string }>) => {
+        if (cancelled) return;
         const initial: ChatMessage[] = entries
-          .filter(e => !seenLogIds.current.has(e.id))
-          .map(e => {
+          .filter((e) => !seenLogIds.current.has(e.id))
+          .map((e) => {
             seenLogIds.current.add(e.id);
             return {
               id: `activity-${e.id}`,
@@ -373,31 +399,16 @@ export function AgentChat({
             };
           });
         if (initial.length > 0) {
-          setMessages(prev => [...prev, ...initial]);
+          setMessages((prev) => [...prev, ...initial]);
         }
+        attachStream();
       })
-      .catch(() => { /* API not up yet */ });
+      .catch(() => { /* API not up — skip SSE until next mount */ });
 
-    const sse = new EventSource(`${apiBase}/api/worker-logs/stream`);
-
-    sse.onmessage = (event) => {
-      try {
-        const entry = JSON.parse(event.data);
-        if (entry?.type === "connected" || !entry?.id) return;
-        if (seenLogIds.current.has(entry.id)) return;
-        seenLogIds.current.add(entry.id);
-        const msg: ChatMessage = {
-          id: `activity-${entry.id}`,
-          role: "activity",
-          content: entry.message,
-          timestamp: new Date(entry.ts),
-          activityLevel: entry.level ?? "info",
-        };
-        setMessages(prev => [...prev, msg]);
-      } catch { /* ignore malformed events */ }
+    return () => {
+      cancelled = true;
+      sse?.close();
     };
-
-    return () => sse.close();
   }, [agentType]);
 
   const scrollToBottom = useCallback(() => {
@@ -523,9 +534,11 @@ export function AgentChat({
       </div>
       <div className="flex-1 min-w-0 text-left">
         <p className="text-sm font-semibold text-foreground">{displayHeading}</p>
-        <p className="text-[10px] text-muted-foreground">
-          Powered by Couchbase Capella AI Services • Natural Language Interface
-        </p>
+        {(!logCollapsible || logOpen) && (
+          <p className="text-[10px] text-muted-foreground">
+            Powered by Couchbase Capella AI Services • Natural Language Interface
+          </p>
+        )}
       </div>
       <div className="flex shrink-0 items-center gap-2">
         <div className="flex items-center gap-1.5">
@@ -749,7 +762,10 @@ export function AgentChat({
         <button
           type="button"
           aria-label="Toggle agent message log"
-          className="flex w-full shrink-0 items-center gap-3 border-b border-border px-4 py-3 bg-muted/30 hover:bg-muted/40 transition-colors"
+          className={cn(
+            "flex w-full shrink-0 items-center gap-3 border-b border-border px-4 bg-muted/30 hover:bg-muted/40 transition-colors",
+            logOpen ? "py-3" : "py-2",
+          )}
         >
           {headerRow}
         </button>

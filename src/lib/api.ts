@@ -345,12 +345,35 @@ export const api = {
     ),
 };
 
+const DASHBOARD_LIVE_QUERY_OPTIONS = {
+  refetchInterval: 10_000,
+  refetchOnWindowFocus: true,
+  staleTime: 5_000,
+} as const;
+
 export function useLiveDashboardData() {
-  const kpisQuery = useQuery({ queryKey: ["kpis"], queryFn: api.kpis });
-  const shipInfoQuery = useQuery({ queryKey: ["shipInfo"], queryFn: api.shipInfo });
-  const incidentsQuery = useQuery({ queryKey: ["incidents"], queryFn: () => api.incidents() });
-  const recommendationsQuery = useQuery({ queryKey: ["recommendations"], queryFn: () => api.recommendations() });
-  const actionProposalsQuery = useQuery({ queryKey: ["action-proposals"], queryFn: () => api.actionProposals() });
+  const kpisQuery = useQuery({ queryKey: ["kpis"], queryFn: api.kpis, ...DASHBOARD_LIVE_QUERY_OPTIONS });
+  const shipInfoQuery = useQuery({
+    queryKey: ["shipInfo"],
+    queryFn: api.shipInfo,
+    refetchOnWindowFocus: true,
+    staleTime: 30_000,
+  });
+  const incidentsQuery = useQuery({
+    queryKey: ["incidents"],
+    queryFn: () => api.incidents(),
+    ...DASHBOARD_LIVE_QUERY_OPTIONS,
+  });
+  const recommendationsQuery = useQuery({
+    queryKey: ["recommendations"],
+    queryFn: () => api.recommendations(),
+    ...DASHBOARD_LIVE_QUERY_OPTIONS,
+  });
+  const actionProposalsQuery = useQuery({
+    queryKey: ["action-proposals"],
+    queryFn: () => api.actionProposals(),
+    ...DASHBOARD_LIVE_QUERY_OPTIONS,
+  });
 
   return {
     kpisQuery,
