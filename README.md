@@ -2,11 +2,9 @@
 
 AI-powered operational intelligence platform for cruise line operations. Demonstrates how operational AI agents can use transactional and operational data to improve cruise-line operations.
 
-## Agents
+## Agent
 
-- **Guest Service Recovery Agent** — Detect service failures, correlate guest data, and recommend recovery actions (uses Couchbase for data)
-- **Port & Excursion Disruption Agent** — Monitor itinerary disruptions, assess impact, and coordinate rebooking (Mock Data only)
-- **Onboard Operations Optimization Agent** — Monitor venue demand, staffing, and maintenance to optimize guest experience (Mock Data only)
+- **Guest Recovery Agent** — Detect service failures, correlate guest data, recommend recovery actions, and run live LLM chat plus the Python worker (Couchbase + OpenAI)
 
 ## Tech Stack
 
@@ -135,19 +133,22 @@ Individual seed/load scripts remain available and are **not** replaced by the or
 
 The demo requires **three processes** running concurrently, each in its own terminal:
 
-### Terminal 1 — API server
-
-```sh
-npx tsx src/api/server.ts
-```
-
-### Terminal 2 — Frontend dev server
+### Terminal 1 — API + frontend (recommended)
 
 ```sh
 npm run dev
 ```
 
-The app is then available at **http://localhost:5173**.
+This starts the Express API on **http://localhost:5173** and Vite on **http://localhost:8080** (UI proxies `/api` to the API).
+
+Or run them separately:
+
+```sh
+npm run dev:api    # Terminal 1 — API only
+npm run dev:vite   # Terminal 2 — Vite only
+```
+
+Open the app at **http://localhost:8080**.
 
 On **Guest Recovery**, the center column (Top-10 guest queue) and the right column (chat-focused incident) can both list the same worker proposal when the selected guest’s open incident matches the incident you are viewing in chat. Each column uses the same approval control; approving either updates the same Couchbase proposal document.
 

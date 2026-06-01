@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Send, Bot, User, Sparkles, Loader2, RotateCcw, Copy, Check, Activity } from "lucide-react";
+import { Send, Bot, User, Sparkles, Loader2, RotateCcw, Copy, Check, Activity, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import ReactMarkdown from "react-markdown";
-import { guests as mockGuests, incidents as mockIncidents, excursions as mockExcursions, venues as mockVenues, agentRecommendations as mockRecommendations, shipInfo as mockShipInfo, type Guest, type Incident, type Excursion, type Venue, type AgentRecommendation } from "@/data/mockData";
+import { guests as mockGuests, incidents as mockIncidents, venues as mockVenues, agentRecommendations as mockRecommendations, shipInfo as mockShipInfo, type Guest, type Incident, type Venue, type AgentRecommendation } from "@/data/mockData";
 import { format } from "date-fns";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
@@ -20,8 +21,11 @@ interface ChatMessage {
 }
 
 interface AgentChatProps {
-  agentType?: "guest-recovery" | "port-disruption" | "onboard-ops" | "general";
+  agentType?: "guest-recovery" | "general";
   className?: string;
+  heading?: string;
+  logCollapsible?: boolean;
+  defaultLogOpen?: boolean;
   onCommand?: (command: string) => void;
   onAgentResponse?: (payload: { query: string; result: AgentQueryResponse }) => void;
 }
@@ -67,7 +71,7 @@ interface AgentChatProps {
 // │   - Calls LLM with retrieved context                                       │
 // │   - Returns structured response for UI rendering                           │
 // └─────────────────────────────────────────────────────────────────────────────┘
-const FALLBACK_RESPONSE = "I'm analyzing the available data but couldn't find a specific match for your query. Try asking about:\n\n- **Guest incidents** and recovery plans\n- **Port disruptions** and excursion status\n- **Venue capacity** and staffing\n- **Ship status** and recommendations\n\nFor example: *\"What's the status of the Santorini excursion?\"* or *\"Show me active incidents\"*";
+const FALLBACK_RESPONSE = "I'm analyzing the available data but couldn't find a specific match for your query. Try asking about:\n\n- **Guest incidents** and recovery plans\n- **Ship status** and voyage context\n- **Active recommendations** awaiting approval\n\nFor example: *\"Show me active incidents\"* or *\"Analyze Jane Doe's incident\"*";
 
 // ┌─────────────────────────────────────────────────────────────────────────────┐
 // │ COUCHBASE INTEGRATION: Query Routing Function                              │
@@ -91,7 +95,6 @@ const FALLBACK_RESPONSE = "I'm analyzing the available data but couldn't find a 
 interface LiveChatData {
   guests: Array<Guest | GuestProfile>;
   incidents: Array<Incident | IncidentRecord>;
-  excursions: Excursion[];
   venues: Venue[];
   recommendations: AgentRecommendation[];
   shipInfo: typeof mockShipInfo | ShipInfo;
@@ -258,24 +261,12 @@ function getAgentResponse(input: string, agentType: string, data: LiveChatData):
     }).join("\n\n")}`;
   }
 
-  if (agentType === "port-disruption" && /excursion|port|weather|disrupt|cancel/.test(text)) {
-    return `### Excursion Status\n\n| Excursion | Port | Status | Booked |\n|---|---|---|---|\n${data.excursions.map(e => `| ${e.name} | ${e.port} | \`${e.status}\` | ${e.booked}/${e.capacity} |`).join("\n")}`;
-  }
-
-  if (agentType === "onboard-ops" && /venue|capacity|staff|dining|pool|ops/.test(text)) {
-    const overloaded = data.venues.filter(v => v.status === "overloaded");
-    const busy = data.venues.filter(v => v.status === "busy");
-    return `### Venue Operations\n\n| Venue | Occupancy | Wait | Staff | Status |\n|---|---|---|---|---|\n${data.venues.map(v => `| ${v.name} | ${v.currentOccupancy}/${v.capacity} | ${v.waitTime}m | ${v.staffCount}/${v.optimalStaff} | \`${v.status}\` |`).join("\n")}\n\nOverloaded: **${overloaded.length}**\nBusy: **${busy.length}**`;
-  }
-
   return FALLBACK_RESPONSE;
 }
 
 const SUGGESTED_QUERIES: Record<string, string[]> = {
-  "general": ["Show ship status", "List active recommendations", "What incidents are open?"],
+  general: ["Show ship status", "List active recommendations", "What incidents are open?"],
   "guest-recovery": ["Analyze Jane Doe's incident", "Show Stark family recovery plan", "List all active incidents"],
-  "port-disruption": ["Santorini weather disruption status", "What happened with Crete excursion?", "Show all excursion status"],
-  "onboard-ops": ["Dining capacity status", "Pool deck and spa status", "Show all venue overview"],
 };
 
 function CopyButton({ content }: { content: string }) {
@@ -297,14 +288,26 @@ function CopyButton({ content }: { content: string }) {
   );
 }
 
-export function AgentChat({ agentType = "general", className, onCommand, onAgentResponse }: AgentChatProps) {
+export function AgentChat({
+  agentType = "general",
+  className,
+  heading,
+  logCollapsible = false,
+  defaultLogOpen = true,
+  onCommand,
+  onAgentResponse,
+}: AgentChatProps) {
+  const [logOpen, setLogOpen] = useState(defaultLogOpen);
   const guestsQuery = useQuery({ queryKey: ["guests"], queryFn: api.guests });
   const incidentsQuery = useQuery({ queryKey: ["incidents"], queryFn: () => api.incidents() });
-  const excursionsQuery = useQuery({ queryKey: ["excursions"], queryFn: api.excursions });
-  const venuesQuery = useQuery({ queryKey: ["venues"], queryFn: api.venues });
+  const venuesQuery = useQuery({
+    queryKey: ["venues"],
+    queryFn: api.venues,
+    enabled: agentType !== "guest-recovery",
+  });
   const recommendationsQuery = useQuery({
     queryKey: ["recommendations", agentType],
-    queryFn: () => api.recommendations(),
+    queryFn: () => api.recommendations("guest-recovery"),
     enabled: agentType !== "guest-recovery",
   });
   const shipInfoQuery = useQuery({ queryKey: ["shipInfo"], queryFn: api.shipInfo });
@@ -312,9 +315,11 @@ export function AgentChat({ agentType = "general", className, onCommand, onAgent
   const liveData: LiveChatData = {
     guests: guestsQuery.data ?? mockGuests,
     incidents: incidentsQuery.data ?? mockIncidents,
-    excursions: excursionsQuery.data ?? mockExcursions,
     venues: venuesQuery.data ?? mockVenues,
-    recommendations: agentType === "guest-recovery" ? [] : (recommendationsQuery.data ?? mockRecommendations),
+    recommendations:
+      agentType === "guest-recovery"
+        ? []
+        : (recommendationsQuery.data ?? mockRecommendations).filter((r) => r.agentType === "guest-recovery"),
     shipInfo: shipInfoQuery.data ?? mockShipInfo,
   };
 
@@ -336,7 +341,6 @@ export function AgentChat({ agentType = "general", className, onCommand, onAgent
   const [chatSessionId] = useState(() => `${agentType}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const handleSendRef = useRef<(text?: string) => void>(() => {});
   const seenLogIds = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -351,14 +355,40 @@ export function AgentChat({ agentType = "general", className, onCommand, onAgent
     if (agentType !== "guest-recovery") return;
 
     const apiBase = import.meta.env.VITE_API_URL ?? "";
+    let cancelled = false;
+    let sse: EventSource | null = null;
 
-    // Seed with recent history before opening the stream
+    const attachStream = () => {
+      sse = new EventSource(`${apiBase}/api/worker-logs/stream`);
+      sse.onmessage = (event) => {
+        try {
+          const entry = JSON.parse(event.data);
+          if (entry?.type === "connected" || !entry?.id) return;
+          if (seenLogIds.current.has(entry.id)) return;
+          seenLogIds.current.add(entry.id);
+          const msg: ChatMessage = {
+            id: `activity-${entry.id}`,
+            role: "activity",
+            content: entry.message,
+            timestamp: new Date(entry.ts),
+            activityLevel: entry.level ?? "info",
+          };
+          setMessages(prev => [...prev, msg]);
+        } catch { /* ignore malformed events */ }
+      };
+    };
+
+    // Seed history and open SSE only when the API is reachable (avoids proxy spam if API is down)
     fetch(`${apiBase}/api/worker-logs`)
-      .then(r => r.json())
-      .then((entries: Array<{id: string; ts: string; level: string; message: string}>) => {
+      .then((r) => {
+        if (!r.ok) throw new Error(`worker-logs ${r.status}`);
+        return r.json();
+      })
+      .then((entries: Array<{ id: string; ts: string; level: string; message: string }>) => {
+        if (cancelled) return;
         const initial: ChatMessage[] = entries
-          .filter(e => !seenLogIds.current.has(e.id))
-          .map(e => {
+          .filter((e) => !seenLogIds.current.has(e.id))
+          .map((e) => {
             seenLogIds.current.add(e.id);
             return {
               id: `activity-${e.id}`,
@@ -369,31 +399,16 @@ export function AgentChat({ agentType = "general", className, onCommand, onAgent
             };
           });
         if (initial.length > 0) {
-          setMessages(prev => [...prev, ...initial]);
+          setMessages((prev) => [...prev, ...initial]);
         }
+        attachStream();
       })
-      .catch(() => { /* API not up yet */ });
+      .catch(() => { /* API not up — skip SSE until next mount */ });
 
-    const sse = new EventSource(`${apiBase}/api/worker-logs/stream`);
-
-    sse.onmessage = (event) => {
-      try {
-        const entry = JSON.parse(event.data);
-        if (entry?.type === "connected" || !entry?.id) return;
-        if (seenLogIds.current.has(entry.id)) return;
-        seenLogIds.current.add(entry.id);
-        const msg: ChatMessage = {
-          id: `activity-${entry.id}`,
-          role: "activity",
-          content: entry.message,
-          timestamp: new Date(entry.ts),
-          activityLevel: entry.level ?? "info",
-        };
-        setMessages(prev => [...prev, msg]);
-      } catch { /* ignore malformed events */ }
+    return () => {
+      cancelled = true;
+      sse?.close();
     };
-
-    return () => sse.close();
   }, [agentType]);
 
   const scrollToBottom = useCallback(() => {
@@ -405,6 +420,12 @@ export function AgentChat({ agentType = "general", className, onCommand, onAgent
   useEffect(() => {
     scrollToBottom();
   }, [messages, scrollToBottom]);
+
+  useEffect(() => {
+    if (logOpen) {
+      scrollToBottom();
+    }
+  }, [logOpen, scrollToBottom]);
 
   const simulateStreaming = useCallback((fullText: string, msgId: string, onComplete?: () => void) => {
     setIsStreaming(true);
@@ -493,50 +514,56 @@ export function AgentChat({ agentType = "general", className, onCommand, onAgent
     }, 400);
   }, [input, isStreaming, agentType, chatSessionId, simulateStreaming, liveData, onCommand, onAgentResponse]);
 
-  // Keep ref in sync and listen for guided demo events
-  handleSendRef.current = handleSend;
-
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      if (detail?.agentType === agentType && detail?.query) {
-        setTimeout(() => handleSendRef.current(detail.query), 300);
-      }
-    };
-    window.addEventListener("guided-demo-query", handler);
-    return () => window.removeEventListener("guided-demo-query", handler);
-  }, [agentType]);
-
   const agentLabels: Record<string, string> = {
-    "general": "VoyageOps AI",
+    general: "VoyageOps AI",
     "guest-recovery": "Guest Recovery Agent",
-    "port-disruption": "Port Disruption Agent",
-    "onboard-ops": "Onboard Ops Agent",
   };
 
   const suggestions = SUGGESTED_QUERIES[agentType] || SUGGESTED_QUERIES["general"];
+  const displayHeading = heading ?? agentLabels[agentType];
 
-  return (
-    <div className={cn("flex flex-col rounded-xl border border-border bg-card overflow-hidden", className)}>
-      {/* Header */}
-      <div className="flex items-center gap-3 border-b border-border px-4 py-3 bg-muted/30">
-        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10">
-          <Bot className="h-4 w-4 text-primary" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-foreground">{agentLabels[agentType]}</p>
+  const rootClassName = cn(
+    "flex flex-col rounded-xl border border-border bg-card overflow-hidden",
+    logCollapsible ? (logOpen ? className : undefined) : className,
+  );
+
+  const headerRow = (
+    <>
+      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+        <Bot className="h-4 w-4 text-primary" />
+      </div>
+      <div className="flex-1 min-w-0 text-left">
+        <p className="text-sm font-semibold text-foreground">{displayHeading}</p>
+        {(!logCollapsible || logOpen) && (
           <p className="text-[10px] text-muted-foreground">
             Powered by Couchbase Capella AI Services • Natural Language Interface
           </p>
-        </div>
+        )}
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
         <div className="flex items-center gap-1.5">
           <span className="h-2 w-2 rounded-full bg-success animate-pulse" />
           <span className="text-[10px] text-success font-medium">Online</span>
         </div>
+        {logCollapsible && (
+          <ChevronDown
+            className={cn(
+              "h-4 w-4 text-muted-foreground transition-transform duration-200",
+              logOpen && "rotate-180",
+            )}
+          />
+        )}
       </div>
+    </>
+  );
 
-      {/* Messages */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-thin min-h-[300px] max-h-[500px]">
+  const messagesPanelClassName = cn(
+    "overflow-y-auto p-4 space-y-4 scrollbar-thin",
+    logCollapsible ? "h-full min-h-0" : "flex-1 min-h-[300px] max-h-[500px]",
+  );
+
+  const messagesPanel = (
+      <div ref={scrollRef} className={messagesPanelClassName}>
         {messages.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-center py-8">
             <div className="h-12 w-12 rounded-2xl bg-primary/10 flex items-center justify-center mb-3">
@@ -679,9 +706,10 @@ export function AgentChat({ agentType = "general", className, onCommand, onAgent
           </div>
         )}
       </div>
+  );
 
-      {/* Input */}
-      <div className="border-t border-border p-3">
+  const inputPanel = (
+      <div className="shrink-0 border-t border-border p-3">
         <div className="flex gap-2">
           {messages.length > 0 && (
             <Button
@@ -714,6 +742,38 @@ export function AgentChat({ agentType = "general", className, onCommand, onAgent
           </Button>
         </div>
       </div>
-    </div>
+  );
+
+  if (!logCollapsible) {
+    return (
+      <div className={rootClassName}>
+        <div className="flex items-center gap-3 border-b border-border px-4 py-3 bg-muted/30">
+          {headerRow}
+        </div>
+        {messagesPanel}
+        {inputPanel}
+      </div>
+    );
+  }
+
+  return (
+    <Collapsible open={logOpen} onOpenChange={setLogOpen} className={rootClassName}>
+      <CollapsibleTrigger asChild>
+        <button
+          type="button"
+          aria-label="Toggle agent message log"
+          className={cn(
+            "flex w-full shrink-0 items-center gap-3 border-b border-border px-4 bg-muted/30 hover:bg-muted/40 transition-colors",
+            logOpen ? "py-3" : "py-2",
+          )}
+        >
+          {headerRow}
+        </button>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="flex-1 min-h-0 overflow-hidden data-[state=closed]:hidden">
+        {messagesPanel}
+      </CollapsibleContent>
+      {inputPanel}
+    </Collapsible>
   );
 }

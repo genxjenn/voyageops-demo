@@ -5,8 +5,6 @@ import {
   agentRecommendations,
   dashboardKPIs,
   guestRecoveryTimeline,
-  onboardOpsTimeline,
-  portDisruptionTimeline,
   shipInfo,
 } from '../src/data/mockData.ts';
 
@@ -70,7 +68,7 @@ function toRecommendationDoc(recommendation: (typeof agentRecommendations)[numbe
 }
 
 function toTimelineDoc(
-  agentType: 'guest-recovery' | 'port-disruption' | 'onboard-ops',
+  agentType: 'guest-recovery',
   event: (typeof guestRecoveryTimeline)[number],
 ) {
   return {
@@ -109,11 +107,7 @@ async function seedRecommendations() {
 }
 
 async function seedTimelineEvents() {
-  const timelines = [
-    { agentType: 'guest-recovery' as const, events: guestRecoveryTimeline },
-    { agentType: 'port-disruption' as const, events: portDisruptionTimeline },
-    { agentType: 'onboard-ops' as const, events: onboardOpsTimeline },
-  ];
+  const timelines = [{ agentType: 'guest-recovery' as const, events: guestRecoveryTimeline }];
 
   let count = 0;
 

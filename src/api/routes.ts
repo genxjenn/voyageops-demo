@@ -460,24 +460,8 @@ async function runPlanAdjustmentLlm(params: {
     },
     requestedIncidentId: params.requestedIncidentId,
     incomingUserMessage: params.query,
-    incident: {
-      incidentId: params.incident?.incidentId || params.incident?.id || params.incident?.docId,
-      guestId: params.incident?.guestId,
-      type: params.incident?.type,
-      category: params.incident?.category,
-      severity: params.incident?.severity,
-      status: params.incident?.status,
-      description: params.incident?.description,
-      createdAt: params.incident?.createdAt,
-      updatedAt: params.incident?.updatedAt,
-    },
-    guest: {
-      guestId: params.guest?.guestId,
-      fullName: params.guest?.fullName || params.guest?.name,
-      loyaltyTier: params.guest?.loyaltyTier,
-      onboardSpend: params.guest?.onboardSpend,
-      bookingId: params.guest?.bookingId,
-    },
+    incident: slimIncidentForLlm(params.incident),
+    guest: slimGuestForLlm(params.guest),
     proposal: params.proposal
       ? {
         proposalId: params.proposal?.proposalId,
@@ -511,11 +495,7 @@ async function runPlanAdjustmentLlm(params: {
       ],
     },
     recentTurns: params.recentTurns.slice(-10).map((turn) => ({
-      role: turn.role,
-      message: turn.message,
-      incidentId: turn.incidentId,
-      guestId: turn.guestId,
-      createdAt: turn.createdAt,
+      ...slimChatTurnForLlm(turn, 1500),
       messageId: turn.messageId,
     })),
     policyRules: params.policyRules,
@@ -620,7 +600,7 @@ async function runPlanAdjustmentLlm(params: {
   contextBundle.chatMemory.relatedChatMessageDocIds.forEach((messageId) => availableCitationIds.add(String(messageId)));
 
   const validated = validatePlanAdjustmentPayload(parsed, allowedActionIds, availableCitationIds, {
-    incidentType: contextBundle.incident.type,
+    incidentType,
     hasDefinedActions,
     hasDefinedPlaybooks,
   });
@@ -926,6 +906,257 @@ function getGuestRecoveryChatVerbosity(): ChatVerbosity {
   return value === 'concise' || value === 'detailed' || value === 'normal' ? value : 'normal';
 }
 
+const LLM_CHAT_USER_TOKEN_BUDGET = 24_000;
+const LLM_TEXT_TRUNC = {
+  description: 500,
+  reasoning: 400,
+  turnMessage: 2000,
+  turnMessageTight: 500,
+} as const;
+
+function truncateForLlm(value: unknown, maxLen: number): string {
+  const text = String(value ?? '').trim();
+  if (text.length <= maxLen) return text;
+  return `${text.slice(0, maxLen)}…`;
+}
+
+function stripVectorFields<T extends Record<string, unknown>>(doc: T): T {
+  const out = { ...doc };
+  for (const key of Object.keys(out)) {
+    if (/^vector_/i.test(key) || /^embedding(s)?$/i.test(key)) {
+      delete out[key];
+    }
+  }
+  return out;
+}
+
+function slimIncidentForLlm(incident: any) {
+  if (!incident || typeof incident !== 'object') return null;
+  const clean = stripVectorFields(incident as Record<string, unknown>);
+  return {
+    incidentId: clean.incidentId || clean.id || clean.docId,
+    guestId: clean.guestId,
+    type: clean.type,
+    category: clean.category,
+    severity: clean.severity,
+    status: clean.status,
+    description: truncateForLlm(clean.description, LLM_TEXT_TRUNC.description),
+    createdAt: clean.createdAt,
+    updatedAt: clean.updatedAt,
+  };
+}
+
+function slimGuestForLlm(guest: any) {
+  if (!guest || typeof guest !== 'object') return null;
+  const clean = stripVectorFields(guest as Record<string, unknown>);
+  return {
+    guestId: clean.guestId,
+    fullName: clean.fullName || clean.name,
+    loyaltyTier: clean.loyaltyTier,
+    loyaltyNumber: clean.loyaltyNumber,
+    cabinNumber: clean.cabinNumber,
+    bookingId: clean.bookingId,
+    onboardSpend: clean.onboardSpend,
+    sailingHistory: clean.sailingHistory,
+    notes: truncateForLlm(clean.notes, 300),
+  };
+}
+
+function slimProposalForLlm(proposal: any) {
+  if (!proposal || typeof proposal !== 'object') return null;
+  const clean = stripVectorFields(proposal as Record<string, unknown>);
+  const actions = Array.isArray(clean.actions)
+    ? clean.actions.slice(0, 8).map((action: any) => ({
+      actionId: action?.actionId,
+      label: action?.label,
+    }))
+    : [];
+  return {
+    proposalId: clean.proposalId,
+    status: clean.status,
+    summary: truncateForLlm(clean.summary, 400),
+    reasoning: truncateForLlm(clean.reasoning, LLM_TEXT_TRUNC.reasoning),
+    actions,
+  };
+}
+
+function slimPlaybookForLlm(playbook: any) {
+  if (!playbook || typeof playbook !== 'object') return null;
+  return {
+    playbookId: playbook.playbookId,
+    title: playbook.title,
+    incidentType: playbook.incidentType,
+    severity: playbook.severity,
+    loyaltyTier: playbook.loyaltyTier,
+    actionIds: Array.isArray(playbook.actionIds) ? playbook.actionIds.slice(0, 8) : [],
+  };
+}
+
+function slimPolicyRuleForLlm(rule: any) {
+  if (!rule || typeof rule !== 'object') return null;
+  return {
+    ruleId: rule.ruleId || rule.ruleDocId,
+    name: rule.name,
+    description: truncateForLlm(rule.description, 200),
+    priority: rule.priority,
+    incidentType: rule.incidentType,
+    severity: rule.severity,
+    constraints: rule.constraints,
+  };
+}
+
+function slimActionCatalogForLlm(action: any) {
+  if (!action || typeof action !== 'object') return null;
+  return {
+    actionId: action.actionId,
+    label: action.label,
+    description: truncateForLlm(action.description, 200),
+    estimatedValue: action.estimatedValue,
+    incidentType: action.incidentType,
+    incidentCategory: action.incidentCategory,
+    loyaltyTier: action.loyaltyTier,
+  };
+}
+
+function slimChatTurnForLlm(turn: ChatTurn, maxMessageLen: number = LLM_TEXT_TRUNC.turnMessage) {
+  return {
+    role: turn.role,
+    message: truncateForLlm(turn.message, maxMessageLen),
+    createdAt: turn.createdAt,
+    incidentId: turn.incidentId,
+    guestId: turn.guestId,
+  };
+}
+
+function estimatePayloadTokens(payload: unknown): number {
+  return Math.ceil(JSON.stringify(payload).length / 4);
+}
+
+type GuestRecoveryChatPayloadLimits = {
+  maxRelatedIncidents: number;
+  maxPlaybooks: number;
+  maxPolicyRules: number;
+  maxActionCatalog: number;
+  maxRecentTurns: number;
+  turnMessageLen: number;
+  descriptionLen: number;
+};
+
+function buildGuestRecoveryChatUserPayload(
+  params: {
+    query: string;
+    recentTurns: ChatTurn[];
+    primaryIncident?: any;
+    relatedIncidents: any[];
+    guest?: any;
+    proposal?: any;
+    matchedPlaybooks: any[];
+    matchedPolicyRules: any[];
+    matchedActionCatalog: any[];
+    coverage: {
+      hasPlaybooks: boolean;
+      hasPolicyRules: boolean;
+      hasActionCatalog: boolean;
+      incidentType: string;
+      incidentCategory: string;
+      incidentSeverity: string;
+      guestTier: string;
+    };
+    verbosity: ChatVerbosity;
+  },
+  limits: GuestRecoveryChatPayloadLimits,
+) {
+  const primaryId = String(
+    params.primaryIncident?.incidentId || params.primaryIncident?.id || params.primaryIncident?.docId || '',
+  ).trim();
+
+  const related = params.relatedIncidents
+    .filter((inc) => {
+      const id = String(inc?.incidentId || inc?.id || inc?.docId || '').trim();
+      return id && id !== primaryId;
+    })
+    .slice(0, limits.maxRelatedIncidents)
+    .map((inc) => slimIncidentForLlm(inc))
+    .filter(Boolean);
+
+  return {
+    operatorQuery: params.query,
+    recentTurns: params.recentTurns
+      .slice(-limits.maxRecentTurns)
+      .map((turn) => slimChatTurnForLlm(turn, limits.turnMessageLen)),
+    currentContext: {
+      incident: params.primaryIncident
+        ? {
+          ...slimIncidentForLlm(params.primaryIncident),
+          description: truncateForLlm(
+            params.primaryIncident?.description,
+            limits.descriptionLen,
+          ),
+        }
+        : null,
+      guest: slimGuestForLlm(params.guest),
+      relatedIncidents: related,
+      currentProposal: slimProposalForLlm(params.proposal),
+    },
+    retrievalContext: {
+      playbooks: params.matchedPlaybooks
+        .slice(0, limits.maxPlaybooks)
+        .map(slimPlaybookForLlm)
+        .filter(Boolean),
+      policyRules: params.matchedPolicyRules
+        .slice(0, limits.maxPolicyRules)
+        .map(slimPolicyRuleForLlm)
+        .filter(Boolean),
+      actionCatalog: params.matchedActionCatalog
+        .slice(0, limits.maxActionCatalog)
+        .map(slimActionCatalogForLlm)
+        .filter(Boolean),
+      coverage: params.coverage,
+    },
+    objectives: [
+      params.verbosity === 'concise'
+        ? 'Answer in 3-5 high-signal bullets without duplicating the guidance fields.'
+        : 'Give an empathetic but operationally concrete response.',
+      'Explain how to adapt recovery approach to this incident context.',
+      'Provide actionable guidance the worker/application can apply.',
+      'Recommend improvements to playbooks, policy rules, and action catalog only when warranted.',
+    ],
+    responsePreferences: {
+      verbosity: params.verbosity,
+      conciseMode: params.verbosity === 'concise',
+      maxBullets: params.verbosity === 'concise' ? 5 : undefined,
+      avoidRepeatedSections: params.verbosity === 'concise',
+      includeMissingArtifactsOnlyIfRelevant: true,
+    },
+  };
+}
+
+function tightenGuestRecoveryChatPayload(
+  params: Parameters<typeof buildGuestRecoveryChatUserPayload>[0],
+  tier: 'moderate' | 'aggressive',
+) {
+  if (tier === 'moderate') {
+    return buildGuestRecoveryChatUserPayload(params, {
+      maxRelatedIncidents: 1,
+      maxPlaybooks: 2,
+      maxPolicyRules: 3,
+      maxActionCatalog: 4,
+      maxRecentTurns: 3,
+      turnMessageLen: 1000,
+      descriptionLen: 300,
+    });
+  }
+  return buildGuestRecoveryChatUserPayload(params, {
+    maxRelatedIncidents: 0,
+    maxPlaybooks: 1,
+    maxPolicyRules: 2,
+    maxActionCatalog: 3,
+    maxRecentTurns: 2,
+    turnMessageLen: LLM_TEXT_TRUNC.turnMessageTight,
+    descriptionLen: 200,
+  });
+}
+
 function appendGuidanceToMarkdown(base: string, guidance: GuidanceBundle, verbosity: ChatVerbosity = 'normal') {
   const hasGuidance =
     guidance.playbookAdjustments.length > 0 ||
@@ -1136,11 +1367,6 @@ async function generateGuestRecoveryLLMResponse(params: {
   }
 
   const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
-  const recentTurns = params.recentTurns.slice(-6).map((turn) => ({
-    role: turn.role,
-    message: turn.message,
-    createdAt: turn.createdAt,
-  }));
 
   const systemMessage = [
     'You are the VoyageOps guest recovery copilot.',
@@ -1161,37 +1387,33 @@ async function generateGuestRecoveryLLMResponse(params: {
     '  missingArtifacts — each item has: artifactType (playbook|action_catalog|policy_rule), title, rationale, priority, draft (object).',
   ].join(' ');
 
-  const userPayload = {
-    operatorQuery: params.query,
-    recentTurns,
-    currentContext: {
-      incident: params.primaryIncident || null,
-      guest: params.guest || null,
-      relatedIncidents: params.relatedIncidents.slice(0, 3),
-      currentProposal: params.proposal || null,
-    },
-    retrievalContext: {
-      playbooks: params.matchedPlaybooks.slice(0, 4),
-      policyRules: params.matchedPolicyRules.slice(0, 6),
-      actionCatalog: params.matchedActionCatalog.slice(0, 8),
-      coverage: params.coverage,
-    },
-    objectives: [
-      params.verbosity === 'concise'
-        ? 'Answer in 3-5 high-signal bullets without duplicating the guidance fields.'
-        : 'Give an empathetic but operationally concrete response.',
-      'Explain how to adapt recovery approach to this incident context.',
-      'Provide actionable guidance the worker/application can apply.',
-      'Recommend improvements to playbooks, policy rules, and action catalog only when warranted.',
-    ],
-    responsePreferences: {
-      verbosity: params.verbosity,
-      conciseMode: params.verbosity === 'concise',
-      maxBullets: params.verbosity === 'concise' ? 5 : undefined,
-      avoidRepeatedSections: params.verbosity === 'concise',
-      includeMissingArtifactsOnlyIfRelevant: true,
-    },
+  const defaultLimits: GuestRecoveryChatPayloadLimits = {
+    maxRelatedIncidents: 2,
+    maxPlaybooks: 2,
+    maxPolicyRules: 4,
+    maxActionCatalog: 6,
+    maxRecentTurns: 4,
+    turnMessageLen: LLM_TEXT_TRUNC.turnMessage,
+    descriptionLen: LLM_TEXT_TRUNC.description,
   };
+
+  let userPayload = buildGuestRecoveryChatUserPayload(params, defaultLimits);
+  let estimatedTokens = estimatePayloadTokens(userPayload);
+
+  if (estimatedTokens > LLM_CHAT_USER_TOKEN_BUDGET) {
+    userPayload = tightenGuestRecoveryChatPayload(params, 'moderate');
+    estimatedTokens = estimatePayloadTokens(userPayload);
+  }
+  if (estimatedTokens > LLM_CHAT_USER_TOKEN_BUDGET) {
+    userPayload = tightenGuestRecoveryChatPayload(params, 'aggressive');
+    estimatedTokens = estimatePayloadTokens(userPayload);
+  }
+
+  if (estimatedTokens > LLM_CHAT_USER_TOKEN_BUDGET) {
+    throw new Error(
+      `Chat payload exceeds token budget after trimming (${estimatedTokens} est. tokens, budget ${LLM_CHAT_USER_TOKEN_BUDGET})`,
+    );
+  }
 
   const completion = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',

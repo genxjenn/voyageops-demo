@@ -1,11 +1,12 @@
 import { AgentChat } from "@/components/AgentChat";
+import { PageTitle, SectionTitle, SectionSubtitle } from "@/components/PageHeading";
 import { StatusBadge } from "@/components/StatusBadge";
 import { User, Crown, CreditCard, Ship, MessageSquare, Star, ChevronDown } from "lucide-react";
 import { useQuery, useQueries, useQueryClient, useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api, type AgentQueryResponse, type GuestProfile, type IncidentRecord, type ActionProposal, type ActionProposalAction, type PrioritizedIncident } from "@/lib/api";
 import { parseTimestamp } from "@/lib/utils";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -88,6 +89,58 @@ interface ChatFocusedIncidentEntry {
   incidentId: string;
   incident: IncidentRecord;
   guest?: GuestProfile;
+}
+
+function FocusedIncidentCard({
+  incident,
+  guest,
+  title = "Focused incident",
+}: {
+  incident: IncidentRecord;
+  guest?: GuestProfile;
+  title?: string;
+}) {
+  return (
+    <div className="rounded-lg border border-destructive/30 bg-card p-4">
+      <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3 flex items-center gap-2">
+        <MessageSquare className="h-3.5 w-3.5 text-destructive" />
+        {title}
+      </h2>
+      {guest && (
+        <p className="text-sm font-medium text-foreground mb-2">
+          {getGuestDisplayName(guest)}
+          {guest.loyaltyTier ? (
+            <span className="ml-2 text-xs font-medium text-warning">({guest.loyaltyTier})</span>
+          ) : null}
+        </p>
+      )}
+      <div className="flex items-center gap-2 mb-2 flex-wrap">
+        <span className="text-xs font-mono text-muted-foreground">{getIncidentIdentifier(incident)}</span>
+        <StatusBadge status={incident.severity} />
+        <StatusBadge status={incident.status} />
+      </div>
+      <p className="text-sm font-medium text-foreground">
+        {incident.type}: {incident.category}
+      </p>
+      <p className="mt-1.5 text-xs text-muted-foreground leading-relaxed">{incident.description}</p>
+      <div className="mt-3 flex gap-4 text-xs text-muted-foreground">
+        <span>
+          Reported:{" "}
+          {parseTimestamp(incident.createdAt).toLocaleTimeString("en-US", {
+            hour: "2-digit",
+            minute: "2-digit",
+          })}
+        </span>
+        <span>
+          Updated:{" "}
+          {parseTimestamp(incident.updatedAt).toLocaleTimeString("en-US", {
+            hour: "2-digit",
+            minute: "2-digit",
+          })}
+        </span>
+      </div>
+    </div>
+  );
 }
 
 type BadgeStatus = Parameters<typeof StatusBadge>[0]["status"];
@@ -174,6 +227,49 @@ function getSeverityPriority(severity: string | undefined) {
     .replace(/[^a-z]/g, "");
 
   return order[normalized] ?? 0;
+}
+
+function isActionableIncidentStatus(status: string | undefined) {
+  const normalized = String(status ?? "").toLowerCase();
+  return normalized === "open" || normalized === "reviewing" || normalized === "pending";
+}
+
+function isPendingProposal(proposal: ActionProposal) {
+  const normalized = String(proposal.status ?? "").toLowerCase();
+  return normalized !== "approved" && normalized !== "executed" && normalized !== "rejected";
+}
+
+function compareIncidentsBySeverityRecency(a: IncidentRecord, b: IncidentRecord) {
+  const severityDelta = getSeverityPriority(b.severity) - getSeverityPriority(a.severity);
+  if (severityDelta !== 0) return severityDelta;
+  return parseTimestamp(b.updatedAt).getTime() - parseTimestamp(a.updatedAt).getTime();
+}
+
+function pickProposalForIncident(proposals: ActionProposal[], incidentId: string | undefined) {
+  if (!incidentId) return undefined;
+  const scopeId = normalizeIncidentIdForAlternatesScope(incidentId);
+  const forIncident = proposals.filter(
+    (proposal) => normalizeIncidentIdForAlternatesScope(proposal.incidentId) === scopeId,
+  );
+  return forIncident.find(isPendingProposal);
+}
+
+function pickActionableIncidentForGuest(
+  selectedGuestId: string,
+  guestIncidents: IncidentRecord[],
+  topRanked: PrioritizedIncident[],
+): IncidentRecord | undefined {
+  const rankedForGuest = topRanked.filter(
+    ({ incident }) =>
+      incident.guestId === selectedGuestId && isActionableIncidentStatus(incident.status),
+  );
+  if (rankedForGuest.length > 0) {
+    return rankedForGuest[0].incident;
+  }
+
+  const actionable = guestIncidents.filter((inc) => isActionableIncidentStatus(inc.status));
+  if (actionable.length === 0) return undefined;
+  return actionable.slice().sort(compareIncidentsBySeverityRecency)[0];
 }
 
 const LOWER_COST_DEMO_FALLBACK: ActionProposalAction[] = [
@@ -476,6 +572,7 @@ const GuestRecoveryAgent = () => {
   const [chattedIncidentIds, setChattedIncidentIds] = useState<string[]>([]);
   const [selectedChatIncidentId, setSelectedChatIncidentId] = useState<string | null>(null);
   const [chatFocusedPlansByIncidentId, setChatFocusedPlansByIncidentId] = useState<Record<string, ChatFocusedPlan>>({});
+  const lastSyncedGuestIdRef = useRef("");
 
   const guestsQuery = useQuery({ queryKey: ["guests"], queryFn: api.guests });
   const guests = guestsQuery.data ?? [];
@@ -497,9 +594,15 @@ const GuestRecoveryAgent = () => {
         input.proposalId,
         input.chatPreviewOverlay ? { chatPreviewOverlay: input.chatPreviewOverlay } : undefined,
       ),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["incidents", "prioritized", "guest-recovery"] });
-      queryClient.invalidateQueries({ queryKey: ["action-proposals"] });
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["incidents"] }),
+        queryClient.invalidateQueries({ queryKey: ["incidents", "prioritized", "guest-recovery"] }),
+        queryClient.invalidateQueries({ queryKey: ["incidents", selectedGuestId] }),
+        queryClient.invalidateQueries({ queryKey: ["action-proposals"] }),
+        queryClient.invalidateQueries({ queryKey: ["proposals", selectedGuestId] }),
+        queryClient.invalidateQueries({ queryKey: ["proposals", "chat-focused"] }),
+      ]);
       toast.success("Action plan approved", { description: "The recovery plan has been queued for execution." });
     },
     onError: (error) => {
@@ -514,16 +617,11 @@ const GuestRecoveryAgent = () => {
   const venues = venuesQuery.data ?? [];
   const nonClosedIncidents = incidents.filter(inc => String(inc.status).toLowerCase() !== "closed");
   const closedIncidents = incidents.filter(inc => inc.status === "closed");
-  const incident = nonClosedIncidents
-    .slice()
-    .sort((a, b) => {
-      const severityDelta = getSeverityPriority(b.severity) - getSeverityPriority(a.severity);
-      if (severityDelta !== 0) return severityDelta;
-
-      const updatedA = parseTimestamp(a.updatedAt).getTime();
-      const updatedB = parseTimestamp(b.updatedAt).getTime();
-      return updatedB - updatedA;
-    })[0] ?? incidents[0];
+  const actionableIncidents = incidents.filter((inc) => isActionableIncidentStatus(inc.status));
+  const incident =
+    (selectedGuestId
+      ? pickActionableIncidentForGuest(selectedGuestId, incidents, topRankedIncidents)
+      : undefined) ?? actionableIncidents.slice().sort(compareIncidentsBySeverityRecency)[0] ?? incidents[0];
   const incidentIdForProposal = incident ? getIncidentIdentifier(incident) : undefined;
   const proposalsQuery = useQuery({
     queryKey: ["proposals", selectedGuestId],
@@ -537,8 +635,6 @@ const GuestRecoveryAgent = () => {
     enabled: Boolean(selectedChatIncidentId),
     refetchInterval: 10000,
   });
-  const focusedProposal = (chatFocusedProposalQuery.data ?? [])[0];
-
   const topGuestIds = Array.from(
     new Set(
       topRankedIncidents
@@ -569,39 +665,79 @@ const GuestRecoveryAgent = () => {
     ?? topGuestOptions[0]?.guest
     ?? guests[0]
     ?? EMPTY_GUEST;
-  const openIncidentIds = new Set(nonClosedIncidents.map((inc) => getIncidentIdentifier(inc)));
-  const openIncidentProposals = (proposalsQuery.data ?? []).filter((proposal) => openIncidentIds.has(proposal.incidentId));
-  const selectedProposal = incidentIdForProposal
-    ? openIncidentProposals.find((proposal) => proposal.incidentId === incidentIdForProposal) ?? openIncidentProposals[0]
-    : openIncidentProposals[0];
+  const actionableIncidentIds = new Set(actionableIncidents.map((inc) => getIncidentIdentifier(inc)));
+  const proposalPool = proposalsQuery.data ?? [];
+  const chatFocusedProposals = chatFocusedProposalQuery.data ?? [];
+  const proposalPoolWithChatFocus =
+    chatFocusedProposals.length === 0
+      ? proposalPool
+      : [
+        ...proposalPool,
+        ...chatFocusedProposals.filter(
+          (proposal) => !proposalPool.some((existing) => existing.proposalId === proposal.proposalId),
+        ),
+      ];
+  const openIncidentProposals = proposalPool.filter((proposal) =>
+    actionableIncidentIds.has(proposal.incidentId),
+  );
+  const pendingOpenIncidentProposals = openIncidentProposals.filter(isPendingProposal);
 
-  const adjustmentPromptIncidentIds = lastAdjustmentPrompt ? extractIncidentIdsFromCommand(lastAdjustmentPrompt) : [];
-  const adjustmentTargetIncidentId = adjustmentPromptIncidentIds[0] ?? selectedChatIncidentId ?? null;
   const findIncidentAcrossSources = (id: string): IncidentRecord | undefined =>
     incidents.find((i) => getIncidentIdentifier(i) === id)
     ?? topRankedIncidents.map(({ incident: ri }) => ri).find((i) => getIncidentIdentifier(i) === id)
     ?? allIncidents.find((i) => getIncidentIdentifier(i) === id);
 
+  const rawFocusIncidentId = selectedChatIncidentId ?? incidentIdForProposal;
+  const rawFocusIncident = rawFocusIncidentId
+    ? findIncidentAcrossSources(rawFocusIncidentId)
+    : undefined;
+  const effectivePlanIncidentId = selectedChatIncidentId ?? incidentIdForProposal;
+  const effectivePlanIncident = effectivePlanIncidentId
+    ? findIncidentAcrossSources(effectivePlanIncidentId)
+    : undefined;
+
+  const adjustmentPromptIncidentIds = lastAdjustmentPrompt ? extractIncidentIdsFromCommand(lastAdjustmentPrompt) : [];
+  const adjustmentTargetIncidentId = adjustmentPromptIncidentIds[0] ?? selectedChatIncidentId ?? null;
+  const adjustmentTargetsEffective = Boolean(
+    adjustmentTargetIncidentId &&
+    effectivePlanIncidentId &&
+    normalizeIncidentIdForAlternatesScope(adjustmentTargetIncidentId) ===
+      normalizeIncidentIdForAlternatesScope(effectivePlanIncidentId),
+  );
+
   const incidentForChatAdjustment =
-    (adjustmentTargetIncidentId ? findIncidentAcrossSources(adjustmentTargetIncidentId) : undefined) ?? incident;
+    (adjustmentTargetsEffective && adjustmentTargetIncidentId
+      ? findIncidentAcrossSources(adjustmentTargetIncidentId)
+      : undefined) ?? effectivePlanIncident ?? incident;
   const proposalForChatAdjustment =
-    (adjustmentTargetIncidentId
-      ? openIncidentProposals.find((p) => p.incidentId === adjustmentTargetIncidentId)
-        ?? (focusedProposal?.incidentId === adjustmentTargetIncidentId ? focusedProposal : undefined)
-      : undefined) ?? selectedProposal;
+    pickProposalForIncident(proposalPoolWithChatFocus, effectivePlanIncidentId)
+    ?? (adjustmentTargetsEffective
+      ? pickProposalForIncident(proposalPoolWithChatFocus, adjustmentTargetIncidentId)
+      : undefined);
 
   const adjustedProposalPreview = buildChatAdjustedProposal(
     proposalForChatAdjustment,
     incidentForChatAdjustment,
     lastAdjustmentPrompt,
   );
-  const displayProposal = adjustedProposalPreview ?? selectedProposal;
-  const visibleProposals = adjustedProposalPreview
+  const planDisplayProposalBase = pickProposalForIncident(
+    proposalPoolWithChatFocus,
+    effectivePlanIncidentId,
+  );
+  const chatFocusedPlan = effectivePlanIncidentId
+    ? chatFocusedPlansByIncidentId[effectivePlanIncidentId]
+    : undefined;
+  const planDisplayProposal =
+    adjustmentTargetsEffective && adjustedProposalPreview
+      ? adjustedProposalPreview
+      : planDisplayProposalBase;
+  const displayProposal = planDisplayProposal;
+  const visibleProposals = adjustedProposalPreview && adjustmentTargetsEffective
     ? [
       adjustedProposalPreview,
-      ...openIncidentProposals.filter((p) => p.proposalId !== proposalForChatAdjustment?.proposalId),
+      ...pendingOpenIncidentProposals.filter((p) => p.proposalId !== proposalForChatAdjustment?.proposalId),
     ]
-    : openIncidentProposals;
+    : pendingOpenIncidentProposals;
   const incidentSeverityById = new Map(
     incidents.map((inc) => [getIncidentIdentifier(inc), String(inc.severity ?? "unknown").toLowerCase()]),
   );
@@ -641,13 +777,6 @@ const GuestRecoveryAgent = () => {
     showWorkerAlternatesUi &&
     (proposal.interactive?.alternativeActions?.length ?? 0) > 0 &&
     alternatesScopeIncidentIds.has(normalizeIncidentIdForAlternatesScope(proposal.incidentId));
-  const showChatIncidentProposalPreview =
-    Boolean(
-      adjustedProposalPreview &&
-      selectedChatIncidentId &&
-      normalizeIncidentIdForAlternatesScope(adjustedProposalPreview.incidentId) ===
-        normalizeIncidentIdForAlternatesScope(selectedChatIncidentId),
-    );
   const severityOrder = ["critical", "high", "medium", "low", "unknown"] as const;
   const proposalsBySeverity = severityOrder
     .map((severity) => ({
@@ -702,7 +831,18 @@ const GuestRecoveryAgent = () => {
   const selectedChatFocusedEntry = selectedChatIncidentId
     ? chatFocusedIncidents.find((entry) => entry.incidentId === selectedChatIncidentId)
     : undefined;
-  const selectedChatPlan = selectedChatIncidentId ? chatFocusedPlansByIncidentId[selectedChatIncidentId] : undefined;
+  const planFocusIncident = effectivePlanIncident;
+  const planFocusGuest =
+    (effectivePlanIncidentId
+      ? findGuestById(guests, effectivePlanIncident?.guestId)
+        ?? rankedGuestByIncidentId.get(effectivePlanIncidentId)
+      : undefined) ?? guest;
+  const planProposalLoading =
+    proposalsQuery.isLoading
+    || (Boolean(selectedChatIncidentId)
+      && chatFocusedProposalQuery.isFetching
+      && !planDisplayProposal
+      && !chatFocusedPlan);
 
   const handleChatCommand = (command: string) => {
     const normalized = command.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
@@ -763,20 +903,30 @@ const GuestRecoveryAgent = () => {
   };
 
   useEffect(() => {
+    if (!selectedGuestId) return;
+    const guestChanged = lastSyncedGuestIdRef.current !== selectedGuestId;
+    if (!guestChanged) return;
+    lastSyncedGuestIdRef.current = selectedGuestId;
     setLastAdjustmentPrompt(null);
-  }, [selectedGuestId]);
+    setSelectedChatIncidentId(incidentIdForProposal ?? null);
+  }, [selectedGuestId, incidentIdForProposal]);
 
   return (
     <div className="p-6 space-y-6 max-w-[1400px] mx-auto">
       <div>
-        <h1 className="text-2xl font-bold text-foreground">Guest Service Recovery Agent</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">Detect service failures, correlate guest data, and recommend recovery actions</p>
+        <PageTitle>Guest Service Recovery Agent</PageTitle>
+        <SectionSubtitle className="mt-1">
+          Detect service failures, correlate guest data, and recommend recovery actions
+        </SectionSubtitle>
       </div>
 
       {/* NLP Chat Interface */}
       <AgentChat
         agentType="guest-recovery"
-        className="h-[520px]"
+        heading="Guest Recovery Agent Log"
+        logCollapsible
+        defaultLogOpen={false}
+        className="h-[340px]"
         onCommand={handleChatCommand}
         onAgentResponse={handleAgentResponse}
       />
@@ -784,7 +934,7 @@ const GuestRecoveryAgent = () => {
       <div className="grid gap-6 lg:grid-cols-3">
         {/* Left column — incidents ranked by lost revenue potential */}
         <div className="space-y-4">
-          <h2 className="text-sm font-semibold text-foreground">Incidents Ranked by Lost Revenue Potential ({topRankedIncidents.length})</h2>
+          <SectionTitle>Incidents Ranked by Lost Revenue Potential ({topRankedIncidents.length})</SectionTitle>
           {topRankedIncidents.map(({ incident: rankedIncident, guest: rankedGuest, potential }: PrioritizedIncident, index) => (
             <div key={getIncidentIdentifier(rankedIncident)} className="rounded-lg border border-border bg-card p-4">
               <div className="flex items-center justify-between gap-3">
@@ -900,7 +1050,7 @@ const GuestRecoveryAgent = () => {
               </div>
 
               <div className="space-y-4">
-                <h2 className="text-sm font-semibold text-foreground">Recovery Plan Approval Queue (Top-10)</h2>
+                <SectionTitle>Recovery Plan Approval Queue (Top-10)</SectionTitle>
 
                 {adjustedProposalPreview && lastAdjustmentPrompt && (
                   <div className="rounded-md border border-warning/20 bg-warning/5 p-2.5">
@@ -1011,133 +1161,126 @@ const GuestRecoveryAgent = () => {
           </Tabs>
         </div>
 
-        {/* Right column — chat-focused incident: selector, LLM plan, full proposal cards for viewed incident */}
+        {/* Right column — focused incident: worker plan */}
         <div className="space-y-4">
           <div className="space-y-2">
-            <h2 className="text-sm font-semibold text-foreground">Chat focus and plan</h2>
+            <SectionTitle>Incident Recovery Proposal</SectionTitle>
             <div className="rounded-lg border border-border bg-card p-4">
-              {recentChattedIncidents.length > 0 && (
-                <div className="mb-4 space-y-2 border-b border-border pb-4">
-                  <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Chat-focused incidents</p>
-                  {recentChattedIncidents.map(({ incidentId, incident: chatInc, guest: chatGuest }) => (
-                    <div key={incidentId} className="rounded-lg border border-border bg-muted/20 p-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="min-w-0 flex-1">
-                          <p className="text-xs font-mono text-muted-foreground">{incidentId}</p>
-                          <p className="text-sm font-semibold text-foreground mt-0.5">
-                            {chatInc ? (chatGuest?.fullName ?? chatGuest?.name ?? "Unknown Guest") : "Unknown Guest"}
-                          </p>
-                          {chatInc && (
-                            <div className="flex items-center gap-2 mt-1">
-                              <StatusBadge status={chatInc.severity} />
-                              <StatusBadge status={chatInc.status} />
-                            </div>
-                          )}
-                        </div>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant={selectedChatIncidentId === incidentId ? "default" : "outline"}
-                          className="shrink-0"
-                          onClick={() => setSelectedChatIncidentId(prev => prev === incidentId ? null : incidentId)}
-                        >
-                          {selectedChatIncidentId === incidentId ? "Viewing" : "View Plan"}
-                        </Button>
-                      </div>
-                      {chatInc && (
-                        <p className="mt-2 text-xs text-muted-foreground line-clamp-2">
-                          {chatInc.type}: {chatInc.category} — {chatInc.description}
-                        </p>
-                      )}
-                    </div>
-                  ))}
-                </div>
+              {planFocusIncident ? (
+                <FocusedIncidentCard
+                  incident={planFocusIncident}
+                  guest={planFocusGuest}
+                  title={
+                    effectivePlanIncidentId &&
+                    selectedChatIncidentId &&
+                    normalizeIncidentIdForAlternatesScope(effectivePlanIncidentId) ===
+                      normalizeIncidentIdForAlternatesScope(selectedChatIncidentId)
+                      ? "Chat-focused incident"
+                      : "Active incident"
+                  }
+                />
+              ) : selectedChatIncidentId ? (
+                <p className="text-xs text-muted-foreground">Loading incident context…</p>
+              ) : (
+                <p className="text-sm text-muted-foreground">No open incident selected for this guest.</p>
               )}
 
-              {!selectedChatIncidentId ? (
-                <p className="text-xs text-muted-foreground leading-relaxed">
-                  {recentChattedIncidents.length > 0
-                    ? "Select “View Plan” on a chat-focused incident above, or ask chat about a specific incident ID."
-                    : "Ask chat about a specific incident ID to show the LLM-generated plan here."}
+              {selectedChatIncidentId &&
+                rawFocusIncident &&
+                !isActionableIncidentStatus(rawFocusIncident.status) &&
+                effectivePlanIncidentId &&
+                normalizeIncidentIdForAlternatesScope(selectedChatIncidentId) !==
+                  normalizeIncidentIdForAlternatesScope(effectivePlanIncidentId) && (
+                <p className="mt-3 text-xs text-muted-foreground leading-relaxed rounded-md border border-border bg-muted/30 p-2">
+                  Showing the pending recovery plan for{" "}
+                  <span className="font-mono text-foreground">{effectivePlanIncidentId}</span>{" "}
+                  (current open incident). The selected chat incident is already approved.
                 </p>
-              ) : selectedChatFocusedEntry ? (
-                  <>
-                    <p className="text-sm font-medium text-foreground">
-                      {selectedChatFocusedEntry.guest ? getGuestDisplayName(selectedChatFocusedEntry.guest) : "Unknown guest"}
+              )}
+
+              <div className="mt-4 space-y-4 border-t border-border pt-4">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Action proposal (viewed incident)
+                </p>
+
+                {planProposalLoading && (
+                  <p className="text-xs text-muted-foreground">Loading worker proposal…</p>
+                )}
+                {!planProposalLoading && !planDisplayProposal && chatFocusedPlan && (
+                  <div className="rounded-md border border-primary/20 bg-primary/5 p-3 space-y-2">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-primary">
+                      Agent recovery plan (from chat)
                     </p>
-                    <div className="mt-2 flex items-center gap-2">
-                      <StatusBadge status={selectedChatFocusedEntry.incident.severity} />
-                      <StatusBadge status={selectedChatFocusedEntry.incident.status} />
+                    <p className="text-xs text-muted-foreground">
+                      Query: <span className="text-foreground">{chatFocusedPlan.query}</span>
+                    </p>
+                    <div className="prose prose-sm dark:prose-invert max-w-none text-xs text-foreground">
+                      <ReactMarkdown>{chatFocusedPlan.response}</ReactMarkdown>
                     </div>
-                    {selectedChatPlan ? (
-                      <>
-                        <p className="mt-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                          Latest Chat Plan
-                        </p>
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          Prompt: <span className="text-foreground">{selectedChatPlan.query}</span>
-                        </p>
-                        <div className="mt-3 max-h-80 overflow-y-auto rounded-lg border border-border bg-muted/20 p-3">
-                          <div className="prose prose-sm max-w-none prose-headings:text-foreground prose-p:text-foreground prose-strong:text-foreground prose-li:text-foreground prose-ul:my-2 prose-ol:my-2 text-xs">
-                            <ReactMarkdown>{selectedChatPlan.response}</ReactMarkdown>
-                          </div>
-                        </div>
-                        {selectedChatPlan.guidance?.missingArtifacts && selectedChatPlan.guidance.missingArtifacts.length > 0 && (
-                          <div className="mt-3 rounded-md border border-warning/25 bg-warning/5 p-2">
-                            <p className="text-[10px] font-semibold uppercase tracking-wider text-warning">
-                              Draft artifacts suggested by chat
+                  </div>
+                )}
+                {!planProposalLoading && !planDisplayProposal && !chatFocusedPlan && (
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    No pending worker proposal for this open incident yet. The worker creates one proposal per incident once processed.
+                  </p>
+                )}
+                {!planProposalLoading && planDisplayProposal && (
+                  <RecoveryProposalCard
+                    proposal={planDisplayProposal}
+                    approveMutation={approveMutation}
+                    showAlternatesForProposalCard={showAlternatesForProposalCard}
+                  />
+                )}
+              </div>
+
+              {recentChattedIncidents.length > 0 && (
+                <div className="mt-4 space-y-2 border-t border-border pt-4">
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Chat-focused incidents
+                  </p>
+                  <div className="space-y-2">
+                    {recentChattedIncidents.map(({ incidentId, incident: chatInc, guest: chatGuest }) => (
+                      <div key={incidentId} className="rounded-lg border border-border bg-muted/20 p-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="min-w-0 flex-1">
+                            <p className="text-xs font-mono text-muted-foreground">{incidentId}</p>
+                            <p className="text-sm font-semibold text-foreground mt-0.5">
+                              {chatInc ? (chatGuest?.fullName ?? chatGuest?.name ?? "Unknown Guest") : "Unknown Guest"}
+                              {chatGuest?.loyaltyTier ? (
+                                <span className="ml-2 text-xs font-medium text-warning">
+                                  ({chatGuest.loyaltyTier})
+                                </span>
+                              ) : null}
                             </p>
-                            <div className="mt-1.5 space-y-1">
-                              {selectedChatPlan.guidance.missingArtifacts.map((artifact, index) => (
-                                <p key={`${artifact.artifactType}-${index}`} className="text-[11px] text-muted-foreground leading-snug">
-                                  • <span className="text-foreground font-medium">{artifact.artifactType}</span>: {artifact.title}
-                                </p>
-                              ))}
-                            </div>
+                            {chatInc && (
+                              <div className="flex items-center gap-2 mt-1">
+                                <StatusBadge status={chatInc.severity} />
+                                <StatusBadge status={chatInc.status} />
+                              </div>
+                            )}
                           </div>
-                        )}
-                      </>
-                    ) : (
-                      <p className="mt-3 text-xs text-muted-foreground">
-                        Ask chat about this incident to show the LLM-generated plan here.
-                      </p>
-                    )}
-                    <div className="mt-4 space-y-4 border-t border-border pt-4">
-                      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                        Action proposal (viewed incident)
-                      </p>
-                      {chatFocusedProposalQuery.isLoading && (
-                        <p className="text-xs text-muted-foreground">Loading worker proposal…</p>
-                      )}
-                      {!chatFocusedProposalQuery.isLoading &&
-                        !showChatIncidentProposalPreview &&
-                        !focusedProposal && (
-                          <p className="text-xs text-muted-foreground leading-relaxed">
-                            No worker proposal for this incident yet. The worker creates one proposal per incident once processed.
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant={selectedChatIncidentId === incidentId ? "default" : "outline"}
+                            className="shrink-0"
+                            onClick={() => setSelectedChatIncidentId(incidentId)}
+                          >
+                            {selectedChatIncidentId === incidentId ? "Viewing" : "View Plan"}
+                          </Button>
+                        </div>
+                        {chatInc && (
+                          <p className="mt-2 text-xs text-muted-foreground line-clamp-2">
+                            {chatInc.type}: {chatInc.category} — {chatInc.description}
                           </p>
                         )}
-                      {showChatIncidentProposalPreview && adjustedProposalPreview && (
-                        <RecoveryProposalCard
-                          proposal={adjustedProposalPreview}
-                          approveMutation={approveMutation}
-                          showAlternatesForProposalCard={showAlternatesForProposalCard}
-                        />
-                      )}
-                      {focusedProposal && (
-                        <RecoveryProposalCard
-                          proposal={focusedProposal}
-                          approveMutation={approveMutation}
-                          showAlternatesForProposalCard={showAlternatesForProposalCard}
-                        />
-                      )}
-                    </div>
-                  </>
-              ) : (
-                <p className="text-xs text-muted-foreground">Loading incident context…</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               )}
             </div>
           </div>
-
         </div>
       </div>
     </div>

@@ -1,21 +1,17 @@
 import { useLocation, useNavigate } from "react-router-dom";
 import { cn } from "@/lib/utils";
-import { Search, LayoutDashboard, UserCheck, Ship, Settings2, FileText, Command } from "lucide-react";
+import { Search, LayoutDashboard, UserCheck, FileText, Command } from "lucide-react";
 import { useState, useEffect, useRef, useMemo } from "react";
 
 const navItems = [
   { label: "Dashboard", to: "/", icon: LayoutDashboard },
   { label: "Guest Recovery", to: "/guest-recovery", icon: UserCheck },
-  { label: "Port & Excursions", to: "/port-disruption", icon: Ship },
-  { label: "Onboard Ops", to: "/onboard-ops", icon: Settings2 },
   { label: "Architecture", to: "/architecture", icon: FileText },
 ];
 
 const searchableItems = [
   { label: "Dashboard", to: "/", keywords: ["home", "overview", "kpi", "metrics"] },
   { label: "Guest Recovery Agent", to: "/guest-recovery", keywords: ["guest", "recovery", "incident", "complaint", "jane doe", "service"] },
-  { label: "Port & Excursion Disruption Agent", to: "/port-disruption", keywords: ["port", "excursion", "weather", "disruption", "santorini", "itinerary"] },
-  { label: "Onboard Operations Agent", to: "/onboard-ops", keywords: ["onboard", "operations", "venue", "staffing", "maintenance", "capacity"] },
   { label: "Architecture", to: "/architecture", keywords: ["architecture", "system", "design", "docs"] },
 ];
 
@@ -129,7 +125,7 @@ export function StickyHeader() {
                 value={query}
                 onChange={e => setQuery(e.target.value)}
                 onKeyDown={handleSearchKeyDown}
-                placeholder="Search pages, agents, features…"
+                placeholder="Search pages and features…"
                 className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground outline-none"
               />
               <kbd className="rounded border border-border bg-muted px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground">

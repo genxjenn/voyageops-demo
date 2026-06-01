@@ -317,7 +317,7 @@ export const api = {
   venues: () => fetchJson<Venue[]>("/api/venues"),
   recommendations: (agentType?: string) =>
     fetchJson<AgentRecommendation[]>("/api/recommendations", { agentType }),
-  timeline: (agentType: "guest-recovery" | "port-disruption" | "onboard-ops") =>
+  timeline: (agentType: "guest-recovery") =>
     fetchJson<TimelineEvent[]>(`/api/timeline/${agentType}`),
   shipInfo: () => fetchJson<ShipInfo>("/api/ship-info"),
   guests: async () => {
@@ -327,7 +327,7 @@ export const api = {
   guestWithIncidents: (id: string) => fetchJson<GuestWithIncidents>(`/api/guests/${id}`),
   agentQuery: (
     query: string,
-    agentType: "guest-recovery" | "port-disruption" | "onboard-ops" | "general",
+    agentType: "guest-recovery" | "general",
     sessionId?: string,
   ) => postJson<AgentQueryResponse>("/api/agent-query", { query, agentType, sessionId }),
   actionProposals: (guestId?: string, incidentId?: string) =>
@@ -345,20 +345,41 @@ export const api = {
     ),
 };
 
+const DASHBOARD_LIVE_QUERY_OPTIONS = {
+  refetchInterval: 10_000,
+  refetchOnWindowFocus: true,
+  staleTime: 5_000,
+} as const;
+
 export function useLiveDashboardData() {
-  const kpisQuery = useQuery({ queryKey: ["kpis"], queryFn: api.kpis });
-  const shipInfoQuery = useQuery({ queryKey: ["shipInfo"], queryFn: api.shipInfo });
-  const incidentsQuery = useQuery({ queryKey: ["incidents"], queryFn: () => api.incidents() });
-  const excursionsQuery = useQuery({ queryKey: ["excursions"], queryFn: api.excursions });
-  const venuesQuery = useQuery({ queryKey: ["venues"], queryFn: api.venues });
-  const recommendationsQuery = useQuery({ queryKey: ["recommendations"], queryFn: () => api.recommendations() });
+  const kpisQuery = useQuery({ queryKey: ["kpis"], queryFn: api.kpis, ...DASHBOARD_LIVE_QUERY_OPTIONS });
+  const shipInfoQuery = useQuery({
+    queryKey: ["shipInfo"],
+    queryFn: api.shipInfo,
+    refetchOnWindowFocus: true,
+    staleTime: 30_000,
+  });
+  const incidentsQuery = useQuery({
+    queryKey: ["incidents"],
+    queryFn: () => api.incidents(),
+    ...DASHBOARD_LIVE_QUERY_OPTIONS,
+  });
+  const recommendationsQuery = useQuery({
+    queryKey: ["recommendations"],
+    queryFn: () => api.recommendations(),
+    ...DASHBOARD_LIVE_QUERY_OPTIONS,
+  });
+  const actionProposalsQuery = useQuery({
+    queryKey: ["action-proposals"],
+    queryFn: () => api.actionProposals(),
+    ...DASHBOARD_LIVE_QUERY_OPTIONS,
+  });
 
   return {
     kpisQuery,
     shipInfoQuery,
     incidentsQuery,
-    excursionsQuery,
-    venuesQuery,
     recommendationsQuery,
+    actionProposalsQuery,
   };
 }
