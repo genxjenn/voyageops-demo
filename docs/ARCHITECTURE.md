@@ -1,8 +1,8 @@
 # VoyageOps AI — Architecture & Design Specification
 
-> **Version:** 1.2 · **Last Updated:** April 2026  
+> **Version:** 1.3 · **Last Updated:** May 2026  
 > **Platform:** Acme Cruise Line · MS Acme Voyager  
-> **Status:** Phase 2 active — live Couchbase backend, conversational Guest Recovery LLM chat, and Python worker-generated action proposals.
+> **Status:** Phase 2 active — live Couchbase backend, Guest Recovery LLM chat, Python worker proposals, operator approval API, and live dashboard polling.
 
 ---
 
@@ -20,7 +20,7 @@
 10. [Routing & Navigation](#10-routing--navigation)
 11. [State Management](#11-state-management)
 12. [Chat & NLP Interface](#12-chat--nlp-interface)
-13. [Guided Demo System](#13-guided-demo-system)
+13. [Operations Dashboard](#13-operations-dashboard-)
 14. [Production Roadmap](#14-production-roadmap)
 15. [Deployment & Infrastructure](#15-deployment--infrastructure)
 16. [Security Considerations](#16-security-considerations)
@@ -61,11 +61,12 @@ VoyageOps AI is an AI-powered operational intelligence platform for cruise line 
 | **Styling** | Tailwind CSS 3.4 + CSS Variables | Utility-first with semantic design tokens |
 | **Components** | shadcn/ui (Radix primitives) | Accessible, composable component library |
 | **Charts** | Recharts 2.15 | Data visualization (Area, Bar, Radar) |
-| **Animation** | Framer Motion 12.35 | Page transitions, guided demo, micro-interactions |
+| **Animation** | Framer Motion 12.35 | Page transitions and micro-interactions |
 | **Markdown** | react-markdown 10.1 | Render agent responses with rich formatting |
 | **Routing** | React Router 6.30 | Client-side SPA routing |
 | **Date Utils** | date-fns 3.6 | Timestamp formatting in chat messages |
-| **State** | React useState/useCallback | Local component state (no global store) |
+| **Server state** | TanStack React Query 5 | API caching, polling (`useLiveDashboardData`, page queries) |
+| **UI state** | React useState/useCallback | Chat, selection, collapsibles (no Redux/Zustand) |
 | **Notifications** | Sonner 1.7 | Toast notifications for actions |
 | **API Backend** | Express + Node.js SDK | `/api/*` routes, Couchbase access, Guest Recovery OpenAI chat/embedding calls |
 | **Worker Runtime** | Python + Couchbase SDK | Guest Recovery agent run polling and proposal generation |
@@ -77,25 +78,16 @@ VoyageOps AI is an AI-powered operational intelligence platform for cruise line 
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                    Browser (SPA)                         │
-│  ┌──────────┐  ┌──────────────────────────────────────┐ │
-│  │ Sidebar  │  │           Main Content               │ │
-│  │ AppLayout│  │  ┌──────────────────────────────┐    │ │
-│  │          │  │  │  Page Components              │    │ │
-│  │ • Dash   │  │  │  (Dashboard, GuestRecovery,   │    │ │
-│  │ • Guest  │  │  │   Architecture)               │    │ │
-│  │ • Arch   │  │  └──────────────────────────────┘    │ │
-│  │          │  │  ┌──────────────────────────────┐    │ │
-│  │          │  │  │  AgentChat (NLP Interface)     │    │ │
-│  │ Agent    │  │  │  • Guest Recovery LLM chat     │    │ │
-│  │ Status   │  │  │  • Streaming simulation        │    │ │
-│  │ Indicators│ │  │  • Markdown rendering           │    │ │
-│  └──────────┘  │  └──────────────────────────────┘    │ │
-│                └──────────────────────────────────────┘ │
-│  ┌──────────────────────────────────────────────────┐   │
-│  │           GuidedDemo (Overlay Panel)              │   │
-│  │  • Step-by-step walkthrough                       │   │
-│  │  • Fires queries into AgentChat via CustomEvent   │   │
-│  └──────────────────────────────────────────────────┘   │
+│  ┌────────────────────────────────────────────────────┐ │
+│  │ StickyHeader — tab nav (Dashboard / Guest / Arch)  │ │
+│  │ Cmd+K palette · VoyageOps branding                 │ │
+│  └────────────────────────────────────────────────────┘ │
+│  ┌────────────────────────────────────────────────────┐ │
+│  │ AppLayout — breadcrumb trail + scrollable main      │ │
+│  │  • Dashboard (CSAT KPIs, ship bar, recovery card)  │ │
+│  │  • GuestRecoveryAgent (chat + 3-column workspace)  │ │
+│  │  • Architecture (in-app technical overview)        │ │
+│  └────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────┘
          │
          ▼
@@ -113,15 +105,15 @@ VoyageOps AI is an AI-powered operational intelligence platform for cruise line 
 
 ---
 
-## 3. Application Architecture (Phase 1 → Phase 2 Transition)
+## 3. Application Architecture
 
 ### Data Model Evolution
 
 **Phase 1 (MVP):** Mock data in `src/data/mockData.ts`
 
-**Phase 2 (Active):** Live Couchbase backend with Guest Recovery LLM chat and worker-generated proposals. The UI exposes Dashboard + Guest Recovery only; excursion/venue data may remain in Couchbase for context and seeds.
+**Phase 2 (Active):** Live Couchbase backend with Guest Recovery LLM chat, worker-generated `action_proposals`, and operator approval. The product UI has two operational surfaces: **Customer Satisfaction Dashboard** (`/`) and **Guest Service Recovery Agent** (`/guest-recovery`). Legacy routes `/port-disruption` and `/onboard-ops` redirect to `/`.
 
-The frontend remains unchanged — all fetch calls route through `/api/*` proxy to backend routes.
+All browser calls use relative `/api/*` paths; Vite proxies them to the Express API.
 
 ### Entry Point & Component Tree
 
@@ -130,16 +122,19 @@ index.html → src/main.tsx → App.tsx → BrowserRouter → AppLayout → Rout
 ```
 
 Frontend initialization:
-1. React Query wraps all async operations (ready for remote API)
-2. BrowserRouter establishes SPA routing
-3. AppLayout provides persistent sidebar navigation
-4. Each page component (Dashboard, GuestRecoveryAgent) dispatches API calls
+1. `QueryClientProvider` wraps the app for React Query
+2. `BrowserRouter` + `AppLayout` (`StickyHeader`, optional breadcrumbs, scrollable `<main>`)
+3. Page components call `api.*` helpers from `src/lib/api.ts`
 
-### Backend Entry Point
+### Local Development
 
-```
-npm run dev → Vite (port 5173) → /api/* proxy → src/api/server.ts → Express routes → Couchbase SDK
-```
+| Process | Command | Port | Role |
+|---|---|---|---|
+| **Combined dev** | `npm run dev` | — | Runs API + Vite via `concurrently` |
+| **API** | `npm run dev:api` | **5173** (`PORT` env) | Express + Couchbase (`src/api/server.ts`) |
+| **UI** | `npm run dev:vite` | **8080** | Vite dev server (`vite.config.ts`) |
+
+Proxy: browser `http://localhost:8080/api/*` → `http://localhost:5173/api/*`.
 
 ### App.tsx — Root Component
 
@@ -148,7 +143,7 @@ npm run dev → Vite (port 5173) → /api/* proxy → src/api/server.ts → Expr
   <TooltipProvider>            // Global tooltip context
     <Toaster /> <Sonner />     // Dual notification systems
     <BrowserRouter>
-      <AppLayout>              // Sidebar + main content wrapper
+      <AppLayout>              // StickyHeader + breadcrumbs + main
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/guest-recovery" element={<GuestRecoveryAgent />} />
@@ -163,76 +158,71 @@ npm run dev → Vite (port 5173) → /api/* proxy → src/api/server.ts → Expr
 </QueryClientProvider>
 ```
 
-### AppLayout Component
+### AppLayout & StickyHeader
 
-The `AppLayout` provides a persistent sidebar navigation with:
-
-- **Logo area** — VoyageOps AI branding with Anchor icon
-- **Navigation links** — Dashboard, Guest Recovery, Architecture
-- **Agent status indicator** — Guest Recovery health
-- **Collapse toggle** — Sidebar collapses from 240px to 64px (icon-only mode)
-- **Scrollable content area** — Main content with custom thin scrollbar
+- **`StickyHeader`** — Top tab navigation (Dashboard, Guest Recovery, Architecture), Cmd/Ctrl+K search palette, branding
+- **`AppLayout`** — Breadcrumb trail when nested (e.g. Guest Recovery → Dashboard parent), full-height scrollable main region
+- **No collapsible sidebar** — navigation is header-based only
 
 ---
 
 ## 4. Agent System Design
 
-### Agent Architecture Pattern
-
-Each agent follows an identical structural pattern:
+### Guest Recovery Workspace Layout (`/guest-recovery`)
 
 ```
-┌─────────────────────────────────────────────────┐
-│    Guest Recovery Agent Page (3-Column Grid)      │
-│                                                   │
-│  ┌─────────────┐ ┌──────────────┐ ┌────────────┐│
-│  │ Context      │ │ Recommen-    │ │ Timeline   ││
-│  │ Panel        │ │ dations      │ │ + Demo     ││
-│  │              │ │              │ │ Scenario   ││
-│  │ • Entity     │ │ • Rec Cards  │ │            ││
-│  │   details    │ │ • Approve/   │ │ • Chrono-  ││
-│  │ • Active     │ │   Reject     │ │   logical  ││
-│  │   alerts     │ │ • Confidence │ │   events   ││
-│  │ • Impact     │ │ • Reasoning  │ │ • Actor    ││
-│  │   summary    │ │ • Actions    │ │   labels   ││
-│  └─────────────┘ └──────────────┘ └────────────┘│
-│                                                   │
-│  ┌───────────────────────────────────────────────┐│
-│  │         AgentChat — NLP Interface (520px)      ││
-│  └───────────────────────────────────────────────┘│
-└─────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│ AgentChat — Guest Recovery Agent Log (collapsible, default closed) │
+│ • POST /api/agent-query  • SSE /api/worker-logs/stream           │
+└──────────────────────────────────────────────────────────────────┘
+┌──────────────────┬──────────────────────────┬─────────────────────┐
+│ Left             │ Center (tabs)            │ Right               │
+│ Ranked incidents │ Guest · Context          │ Incident recovery   │
+│ by lost revenue  │ • Top-10 guest select    │ proposal            │
+│ potential        │ • Profile + active inc.  │ • Chat-focused inc. │
+│                  │ • Approval queue (top-10)│ • View Plan list    │
+│                  │ • Demo scenario (ctx tab)│ • Worker / chat plan│
+└──────────────────┴──────────────────────────┴─────────────────────┘
 ```
 
-### Guest Recovery Agent (`/guest-recovery`) — Live Conversational Recovery Planning
+### Guest Recovery Agent — Live Conversational Recovery Planning
 
-**Context Panel:**
-- Guest profile card (name, loyalty tier, cabin, booking, spend, sailing history, notes)
-- Active incident card (ID, severity badge, status badge, timestamps)
-- All incidents list with severity/status badges
+**Ranked incidents (left):** `GET /api/incidents/prioritized` — incidents with estimated lost-revenue potential.
 
-**AI Chat Interface (AgentChat):**
-- User query → `POST /api/agent-query` with OpenAI embedding and chat memory
-- Backend resolves explicit incident IDs first, then falls back to vector retrieval across incident indexes
-- Backend assembles guest, incident, proposal, playbook, policy, and action-catalog context
-- OpenAI chat completion returns conversational markdown plus structured `guidance`
-- `guidance` can include playbook, policy rule, action catalog, operational guidance, and missing-artifact drafts
-- Chat-focused incident state displays the latest LLM response independently from the worker proposal
-- Chat badge shows: 
-  - **Vector Mode** (blue) = indexes active
-  - **Indexes active** (gray) = count of live GSI vector indexes
-  - **Fallback active** (warning) = in-memory cosine similarity fallback
+**Center column — Guest tab:**
+- Top-10 ranked guest selector
+- Guest profile (loyalty, cabin, booking, onboard spend, sailing history, notes)
+- Active incident summary
+- **Recovery Plan Approval Queue** — worker `action_proposals` grouped by severity; approve via `POST /api/action-proposals/:id/approve`
+- **Chat-adjusted preview** — in-memory overlay when operator prompts mention adjust/swap/budget keywords; approval can persist `chatPreviewOverlay` on the proposal document
 
-**Agent data model (production):**
-- Query triggers Capella Eventing OnUpdate → writes pending run to `agent_runs`
-- Backend worker polls pending runs
-- Resolves incident and guest context, finds a playbook, loads eligible actions and policy rules
-- Calls OpenAI chat completions for structured recovery recommendation JSON
-- Retries once if the model selects an unknown `actionId`, then falls back to the top eligible action only after retry
-- Writes proposal to `action_proposals` → approval queue
-- If no eligible actions exist, writes `coverage_gap_drafts_ready` with draft playbook/action/policy artifacts
-- On approval, writes execution + outcomes for analytics
+**Center column — Context tab:**
+- Collapsible all-incidents list (open vs closed counts)
+- Collapsible demo scenario narrative (venue correlation when venue data is available)
 
-**Unique data points:** Lifetime value, churn risk, first-complaint flag, policy constraints
+**Right column — Incident recovery proposal:**
+- `effectivePlanIncidentId` = chat-selected incident or default top open incident for guest
+- Worker proposal card when pending; **Agent recovery plan (from chat)** when LLM returned guidance but no worker proposal yet
+- **Chat-focused incidents** list with **View Plan** (always selects; no toggle-off)
+
+**AI Chat (`AgentChat`):**
+- `logCollapsible` + `defaultLogOpen={false}` — log collapsed by default; operator input remains visible
+- User query → `POST /api/agent-query` (`agentType` must be `guest-recovery`)
+- Backend resolves explicit incident IDs first, then vector retrieval over incident GSI indexes
+- Returns markdown + structured `guidance` (playbook, policy, catalog, operational, missing-artifact drafts)
+- `onAgentResponse` stores chat-focused plans per incident ID in parent state
+- Live worker activity: `GET /api/worker-logs` + `EventSource` on `/api/worker-logs/stream`
+- Retrieval badges: **Vector Mode**, index count, or **Fallback active**
+
+**Worker pipeline (production):**
+- Open incident → Capella Eventing → pending `agent_runs`
+- Python worker polls, resolves playbook + catalog + policies, LLM JSON plan → `action_proposals`
+- Coverage-gap path when no eligible catalog actions (`coverage_gap_drafts_ready`)
+- Operator **Approve** → updates proposal + incident status + execution stub (full outcomes analytics still Phase 3)
+
+**Guest selection sync:** `selectedChatIncidentId` resets only when the selected **guest** changes (`lastSyncedGuestIdRef`), not on every prioritized-incidents refetch (~10s).
+
+**Unique data points:** Lifetime value, churn risk, loyalty tier, venue correlation, policy constraints
 
 ---
 
@@ -355,9 +345,9 @@ Incident created (status=open)
      ↓
   Coverage gap drafts if actions are missing            ← IMPLEMENTED
      ↓
-  Human approves → action_execution created             ← NOT YET IMPLEMENTED
+  Human approves → POST /api/action-proposals/:id/approve ← IMPLEMENTED (proposal + incident status)
      ↓
-  Outcomes measured and recorded                        ← NOT YET IMPLEMENTED
+  action_execution stub + outcomes analytics            ← PARTIAL / Phase 3
 ```
 
 ### Collections in Agent Scope
@@ -386,11 +376,7 @@ Incident created (status=open)
 
 ### Embedded Data Seeding
 
-Before agent runs can generate quality proposals, seed the retrieval collections:
-
-```bash
-npm run seed:agent
-```
+Before agent runs can generate quality proposals, seed agent-scope retrieval data via cluster setup scripts (see `docs/README.manual-setup.md` and `scripts/seed-intelligence-data.ts`).
 
 **Populates:**
 - **action_catalog** (10 actions with OpenAI embeddings)
@@ -442,27 +428,20 @@ For `guest-recovery`, AgentChat displays retrieval and response status:
 ```
 App
 ├── AppLayout
-│   ├── Sidebar Navigation (5 NavLinks)
-│   ├── Agent Status Indicators
-│   └── Collapse Toggle
-├── Dashboard
-│   ├── KPICard (×6)
-│   ├── Guest Recovery workspace entry
-│   ├── Guest Recovery snapshot
-│   ├── SatisfactionTrendsChart (AreaChart)
-│   ├── RevenueProtectedChart (BarChart)
-│   ├── AgentConfidenceChart (RadarChart)
-│   ├── Active Incidents List
+│   ├── StickyHeader (tabs + Cmd+K search)
+│   └── Breadcrumbs (when applicable)
+├── Dashboard — Customer Satisfaction Dashboard
+│   ├── KPICard sidebar (compact, live override for recovery opportunities)
+│   ├── Ship status bar (live ship-info)
+│   ├── Guest Recovery entry card (incidents + pending proposals)
+│   └── DashboardCharts (satisfaction, revenue, recovery confidence radar)
 ├── GuestRecoveryAgent
-│   ├── Guest Profile Card
-│   ├── Active Incident Card
-│   ├── All Incidents List
-│   ├── RecommendationCard (×2)
-│   ├── AgentTimeline (5 events)
-│   ├── Demo Scenario Card
-│   └── AgentChat (guest-recovery)
-├── Architecture (technical docs page)
-└── GuidedDemo (floating overlay)
+│   ├── AgentChat (guest-recovery, collapsible log)
+│   ├── Prioritized incident cards
+│   ├── Tabs: Guest (profile, approval queue) | Context (incidents, demo scenario)
+│   ├── RecoveryProposalCard + approve mutation
+│   └── Chat-focused incident / plan column
+└── Architecture (in-app overview page)
 ```
 
 ### Shared Components
@@ -471,11 +450,12 @@ App
 |---|---|---|---|
 | `KPICard` | `KPICard.tsx` | `kpi: OperationalKPI` | Displays metric with trend indicator (up/down/neutral), hover glow effect |
 | `StatusBadge` | `StatusBadge.tsx` | `status: StatusType` | Universal status pill with dot + color. Supports 18 status types across all domains |
-| `RecommendationCard` | `RecommendationCard.tsx` | `recommendation: AgentRecommendation` | Expandable card with reasoning, data sources, per-action approve/reject buttons, confidence score |
-| `AgentTimeline` | `AgentTimeline.tsx` | `events: TimelineEvent[]` | Vertical timeline with typed icons (alert, analysis, recommendation, action, resolution, info) |
-| `AgentChat` | `AgentChat.tsx` | `agentType, className` | Full NLP chat interface with streaming, markdown rendering, copy-to-clipboard, timestamps |
-| `GuidedDemo` | `GuidedDemo.tsx` | (none — global) | 4-step guided walkthrough with live query firing into agent chat panels |
-| `NavLink` | `NavLink.tsx` | `className, activeClassName` | Wrapper around React Router's NavLink with conditional class support |
+| `StickyHeader` | `StickyHeader.tsx` | — | Top nav tabs, Cmd+K palette, branding |
+| `PageHeading` | `PageHeading.tsx` | — | `PageTitle`, `SectionTitle`, `SubsectionTitle` typography helpers |
+| `AgentChat` | `AgentChat.tsx` | `agentType`, `logCollapsible`, `defaultLogOpen`, `onAgentResponse` | Guest Recovery LLM chat, worker log SSE, markdown, streaming simulation |
+| `AgentTimeline` | `AgentTimeline.tsx` | `events` | Legacy timeline component (not mounted in current pages) |
+| `RecommendationCard` | `RecommendationCard.tsx` | `recommendation` | Legacy recommendation card (not mounted in current pages) |
+| `NavLink` | `NavLink.tsx` | — | React Router NavLink wrapper (legacy; header uses plain links) |
 
 ### Chart Components (DashboardCharts.tsx)
 
@@ -483,7 +463,7 @@ App
 |---|---|---|---|
 | `SatisfactionTrendsChart` | Area | 10 days × 4 categories | Shows declining dining scores triggering agent intervention |
 | `RevenueProtectedChart` | Bar (stacked) | 10 days × 2 series | Cumulative revenue protected vs. at-risk |
-| `AgentConfidenceChart` | Radar | 6 metrics × 3 agents | Comparative agent performance across quality dimensions |
+| `AgentConfidenceChart` | Radar | 6 metrics × 1 series | Guest Recovery confidence scores (demo chart data) |
 
 ---
 
@@ -576,7 +556,7 @@ The `StatusBadge` component maps 18 status types to consistent color treatments:
 
 | Path | Component | Description |
 |---|---|---|
-| `/` | `Dashboard` | Operations command center with KPIs, charts, alerts |
+| `/` | `Dashboard` | Customer Satisfaction Dashboard — KPIs, ship bar, Guest Recovery card, charts |
 | `/guest-recovery` | `GuestRecoveryAgent` | Guest service recovery agent workspace |
 | `/port-disruption`, `/onboard-ops` | — | Redirect to `/` (legacy URLs) |
 | `/architecture` | `Architecture` | Technical architecture documentation page |
@@ -584,17 +564,17 @@ The `StatusBadge` component maps 18 status types to consistent color treatments:
 
 ### Navigation Items
 
-Defined in `AppLayout.tsx`:
+Defined in `StickyHeader.tsx`:
 
 ```typescript
 const navItems = [
-  { label: "Dashboard",      to: "/",                icon: LayoutDashboard },
-  { label: "Guest Recovery",  to: "/guest-recovery",  icon: UserCheck },
-  { label: "Architecture",   to: "/architecture",    icon: FileText },
+  { label: "Dashboard",     to: "/",               icon: LayoutDashboard },
+  { label: "Guest Recovery", to: "/guest-recovery", icon: UserCheck },
+  { label: "Architecture",  to: "/architecture",   icon: FileText },
 ];
 ```
 
-Active state: `bg-primary/10 text-primary`
+Active tab: underline + `text-primary`. Global search: **Cmd/Ctrl+K** over `searchableItems`.
 
 ---
 
@@ -606,26 +586,18 @@ The application uses **no global state management** (no Redux, Zustand, or Conte
 
 | Component | State | Type |
 |---|---|---|
-| `AppLayout` | `collapsed` | `boolean` — sidebar collapse |
-| `AgentChat` | `messages`, `input`, `isStreaming` | Chat message array, input text, streaming flag |
-| `RecommendationCard` | `expanded`, `status` | Expandable reasoning, local status override |
-| `GuidedDemo` | `isOpen`, `currentStep`, `hasCompleted`, `demoFired` | Demo overlay state |
+| `StickyHeader` | `searchOpen`, `query`, `selectedIndex` | Cmd+K palette |
+| `AgentChat` | `messages`, `input`, `isStreaming`, `logOpen` | Chat + collapsible log panel |
+| `GuestRecoveryAgent` | `selectedGuestId`, `selectedChatIncidentId`, `chatFocusedPlansByIncidentId`, … | Guest/incident focus, chat plans, approval |
+| `Dashboard` | (none) | Data from `useLiveDashboardData()` hooks |
 
-### Cross-Component Communication
+### Live Dashboard Polling
 
-The `GuidedDemo` → `AgentChat` communication uses a **CustomEvent** pattern:
+`useLiveDashboardData()` refetches every **10s** (`refetchInterval`) with `staleTime: 5s` for:
 
-```typescript
-// GuidedDemo fires:
-window.dispatchEvent(new CustomEvent("guided-demo-query", {
-  detail: { query: "...", agentType: "guest-recovery" }
-}));
+- `["kpis"]`, `["incidents"]`, `["recommendations"]`, `["action-proposals"]`
 
-// AgentChat listens:
-window.addEventListener("guided-demo-query", handler);
-```
-
-This decoupled pattern avoids prop drilling and works across the component tree.
+The **Guest Recovery Opportunities** KPI value is overridden client-side to match open/reviewing incident count. **Pending Proposals** on the dashboard card uses pending `action_proposals` from the API.
 
 ---
 
@@ -684,28 +656,18 @@ Responses are revealed character-by-character at 3 chars per 12ms interval (~250
 
 ---
 
-## 13. Guided Demo System
+## 13. Operations Dashboard (`/`)
 
-### 2-Step Walkthrough
+The dashboard title in UI is **Customer Satisfaction Dashboard**.
 
-| Step | Route | Demo Queries |
+| Region | Data source | Behavior |
 |---|---|---|
-| 1. Operations Dashboard | `/` | (none — overview only) |
-| 2. Guest Recovery Agent | `/guest-recovery` | "Analyze Margaret Chen's incident", "Rossi suite AC critical" |
+| KPI sidebar | `GET /api/dashboard/kpis` + mock fallback | Compact cards; **Guest Recovery Opportunities** count from live open/reviewing incidents |
+| Ship bar | `GET /api/ship-info` | Voyage, location, passengers, next port ETA |
+| Guest Recovery card | incidents + `action-proposals` | Links to `/guest-recovery`; shows open/reviewing count and pending proposal count |
+| Charts | Static demo series in `DashboardCharts.tsx` | Satisfaction trend, revenue protected, recovery agent confidence radar |
 
-### UX Flow
-
-1. **Entry:** Floating "Guided Demo" button (bottom-right, appears with spring animation after 1s delay)
-2. **Panel:** Right-side drawer (400px max) with backdrop blur
-3. **Per step:** Icon + title + description → Key Capabilities list (staggered animation) → Live Agent Demo buttons
-4. **Query firing:** Button click dispatches `CustomEvent` → AgentChat receives and auto-sends query
-5. **Completion:** CheckCircle animation → auto-close after 2.5s
-
-### State Management
-
-- `demoFired` record prevents duplicate query firing per step
-- `currentStep` drives both panel content and `navigate()` route changes
-- Progress bar animates with Framer Motion
+Legacy agent routes (`/port-disruption`, `/onboard-ops`) redirect to `/` for bookmark compatibility.
 
 ---
 
@@ -713,11 +675,10 @@ Responses are revealed character-by-character at 3 chars per 12ms interval (~250
 
 ### Phase 1 — MVP Demo
 
-- ✅ Full UI with mock data
-- ✅ Guest Recovery workspace with context panels, recommendations, timeline
-- ✅ Guest Recovery live LLM chat; `general` chat mode uses deterministic fallback
-- ✅ Guided demo with live query injection
-- ✅ Responsive layout with collapsible sidebar
+- ✅ Full UI with mock data fallbacks
+- ✅ Guest Recovery workspace (3-column layout + approval queue)
+- ✅ Guest Recovery live LLM chat; `general` agent type uses deterministic fallback in `AgentChat`
+- ✅ Sticky header navigation + Cmd+K search
 - ✅ Rich data visualization (3 chart types)
 
 ### Phase 2 (Active) — Couchbase Capella + Guest Recovery Agent
@@ -732,7 +693,9 @@ Responses are revealed character-by-character at 3 chars per 12ms interval (~250
 | **Eventing** | Document change triggers for agent activation |
 | **Guest Recovery Chat** | Conversational LLM response with structured guidance and missing-artifact drafts |
 | **Worker Loop** | Python worker processes `agent_runs` and writes `action_proposals` |
-| **Replication** | XDCR for multi-region fleet sync |
+| **Operator Approval** | `POST /api/action-proposals/:id/approve` updates proposal and incident |
+| **Live Dashboard** | React Query polling for KPIs, incidents, proposals |
+| **Replication** | XDCR for multi-region fleet sync (target) |
 
 ### Phase 3 — Approval, Execution, and Broader Agent Orchestration
 
@@ -742,7 +705,7 @@ Responses are revealed character-by-character at 3 chars per 12ms interval (~250
 | **Orchestration** | LangChain/LangGraph agent pipelines |
 | **RAG** | Couchbase Vector Search and SQL++ context retrieval |
 | **Tools** | Agent tools for database queries, API calls, action execution |
-| **Approval** | Human-in-the-loop workflows with audit logging |
+| **Approval** | Full execution write-back, outcomes documents, governance for draft artifacts |
 
 ### Phase 4 — Production Operations
 
@@ -760,11 +723,11 @@ Responses are revealed character-by-character at 3 chars per 12ms interval (~250
 
 ### Current
 
-- **Hosting:** Lovable preview / published URL
-- **Build:** `vite build` produces static SPA
-- **Dev server:** Vite, proxied `/api/*` calls to Express
-- **API server:** `src/api/server.ts`, loading repo-root `.env`
-- **Worker:** `.venv/bin/python backend/python/guest_recovery/run_worker_loop.py`
+- **Hosting:** Lovable preview / published URL (static SPA + separate API process in production)
+- **Build:** `npm run build` → `dist/` static assets
+- **Dev:** `npm run dev` — Express on **5173**, Vite on **8080**, proxy `/api` → API
+- **API:** `src/api/server.ts`, repo-root `.env` via `dotenv`
+- **Worker:** `npm run demo:worker` → `backend/python/guest_recovery/run_worker_loop.py`
 
 ### Production Target
 
@@ -795,6 +758,8 @@ Responses are revealed character-by-character at 3 chars per 12ms interval (~250
 | `GUEST_RECOVERY_CHAT_VERBOSITY` | `concise`, `normal`, or `detailed` chat response style |
 | `GUEST_RECOVERY_QUERY_TIMEOUT_SECONDS` | Worker pending-run query timeout |
 | `GUEST_RECOVERY_POLL_MAX_ATTEMPTS` | Worker pending-run retry attempts |
+| `PORT` | Express listen port (default `5173`) |
+| `VITE_API_BASE_URL` | Optional absolute API base (empty = same-origin `/api` via proxy) |
 
 ---
 
@@ -804,7 +769,7 @@ Responses are revealed character-by-character at 3 chars per 12ms interval (~250
 
 - No authentication (demo mode)
 - No API keys in client code
-- All data is static mock — no PII exposure
+- Guest Recovery uses live Capella data when configured; mock fallbacks when API unavailable
 - Backend and worker connectivity use server-side `.env`; frontend never receives Couchbase or OpenAI credentials
 
 ### Production Requirements
@@ -823,35 +788,38 @@ Responses are revealed character-by-character at 3 chars per 12ms interval (~250
 
 ## 17. Appendix: File Inventory
 
-### Pages (4 files)
+### Pages
 
-| File | Lines | Description |
+| File | Lines (approx.) | Description |
 |---|---|---|
-| `src/pages/Dashboard.tsx` | — | Operations command center |
-| `src/pages/GuestRecoveryAgent.tsx` | — | Guest recovery agent workspace |
-| `src/pages/Architecture.tsx` | — | Technical architecture page |
-| `src/pages/NotFound.tsx` | — | 404 fallback |
+| `src/pages/Dashboard.tsx` | 153 | Customer Satisfaction Dashboard |
+| `src/pages/GuestRecoveryAgent.tsx` | 1290 | Guest recovery workspace |
+| `src/pages/Architecture.tsx` | 159 | In-app architecture overview |
+| `src/pages/NotFound.tsx` | 24 | 404 fallback |
+| `src/pages/Index.tsx` | 14 | Redirect stub |
 
-### Components (8 custom + shadcn/ui)
+Removed from product (redirect only): `PortDisruptionAgent`, `OnboardOpsAgent`.
 
-| File | Lines | Description |
+### Key components
+
+| File | Lines (approx.) | Description |
 |---|---|---|
-| `src/components/AppLayout.tsx` | 93 | Sidebar + main content layout |
-| `src/components/AgentChat.tsx` | ~350 | NLP chat interface with streaming |
-| `src/components/AgentTimeline.tsx` | 57 | Vertical event timeline |
-| `src/components/DashboardCharts.tsx` | 129 | 3 Recharts visualizations |
-| `src/components/GuidedDemo.tsx` | 341 | Guided demo overlay |
-| `src/components/KPICard.tsx` | 28 | KPI metric card |
-| `src/components/RecommendationCard.tsx` | 115 | Expandable recommendation card |
-| `src/components/StatusBadge.tsx` | 43 | Universal status pill |
-| `src/components/NavLink.tsx` | 28 | React Router NavLink wrapper |
-| `src/components/ui/*` | ~50 files | shadcn/ui component library |
+| `src/components/AppLayout.tsx` | 53 | Sticky header wrapper + breadcrumbs |
+| `src/components/StickyHeader.tsx` | 171 | Tab nav + Cmd+K search |
+| `src/components/AgentChat.tsx` | 779 | Guest Recovery chat + worker logs |
+| `src/components/DashboardCharts.tsx` | 127 | Recharts dashboard visuals |
+| `src/components/KPICard.tsx` | — | KPI metric card (`compact` on dashboard) |
+| `src/components/StatusBadge.tsx` | — | Universal status pill |
+| `src/lib/api.ts` | ~390 | API client + `useLiveDashboardData` |
+| `src/api/routes.ts` | ~2600 | Express routes (incidents, agent-query, proposals, worker-logs) |
+| `src/components/ui/*` | ~50 files | shadcn/ui primitives |
 
 ### Data & Config
 
 | File | Description |
 |---|---|
-| `src/data/mockData.ts` | 443 lines — all TypeScript interfaces and mock data |
+| `src/data/mockData.ts` | TypeScript interfaces + mock fallbacks (guest-recovery only in UI) |
+| `vite.config.ts` | Vite port 8080, `/api` proxy to 5173 |
 | `src/index.css` | 187 lines — Tailwind config, CSS variables, custom utilities |
 | `tailwind.config.ts` | 178 lines — Extended theme with colors, animations, shadows |
 | `vite.config.ts` | 20 lines — Vite config with path aliases |
