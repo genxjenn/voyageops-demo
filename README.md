@@ -14,6 +14,7 @@ AI-powered operational intelligence platform for cruise line operations. Demonst
 - Couchbase (data + vector search)
 - OpenAI (embeddings + LLM reasoning)
 - Python 3 (Guest Recovery Agent worker)
+- Couchbase Agent Catalog (`agentc`) — versioned prompt/tool catalog + activity logging
 
 ---
 
@@ -47,6 +48,14 @@ CB_VECTOR_INDEX_TYPE=
 CB_VECTOR_INDEX_DESC=
 CB_PLAYBOOK_VECTOR_INDEX=voAgent_vector_playbooks_embedding
 CB_VECTOR_INDEX_OUTCOMES=
+GUEST_RECOVERY_USE_AGENTC=false
+# ${VAR} interpolation works here, so you can reuse your cluster credentials directly:
+AGENT_CATALOG_CONN_STRING=${COUCHBASE_ENDPOINT}
+AGENT_CATALOG_USERNAME=${COUCHBASE_USER}
+AGENT_CATALOG_PASSWORD=${COUCHBASE_PASSWORD}
+AGENT_CATALOG_BUCKET=voyageops
+AGENT_CATALOG_CATALOG=.agent-catalog
+AGENT_CATALOG_ACTIVITY=.agent-activity
 ```
 
 **Before first setup:** Whitelist your laptop IP (Capella), create a read-write user on the `voyageops` bucket, and ensure the bucket exists. Eventing deploy often needs **cluster admin** credentials in `.env` (or `COUCHBASE_CLI_*` for CLI mode).
@@ -121,7 +130,24 @@ CB_VECTOR_INDEX_OUTCOMES=voAgent_vector_outcomes_embedding
 
 On **Capella**, the FTS index may appear as `voyageops.agent.voAgent_vector_playbooks_embedding`; keep the short name in `.env` — the worker resolves scoped Search index names automatically.
 
-### 3. Manual setup (archived)
+### 3. Agent Catalog setup (agentc) — optional
+
+The Guest Recovery worker can load its system prompt from the [Couchbase Agent Catalog](https://docs.couchbase.com/ai/build/integrate-agent-with-catalog.html) instead of the built-in default, which lets prompt/tool changes be versioned and their usage logged in Couchbase. `agentc` reuses your cluster credentials and, on publish, creates a `voyageops.agent_catalog` scope.
+
+```sh
+npm run demo:setup-agentc
+```
+
+This runs `agentc init`, `agentc index backend/python/guest_recovery`, and `agentc publish` against `AGENT_CATALOG_BUCKET`. Requirements:
+
+- `agentc` installed in `.venv` (already included via `backend/python/guest_recovery/requirements.txt`)
+- A **clean git working tree** — `agentc index` refuses to run with uncommitted changes
+- `AGENT_CATALOG_CONN_STRING`, `AGENT_CATALOG_USERNAME`, `AGENT_CATALOG_PASSWORD` set in `.env` — `.env` supports `${VAR}` interpolation, so you can reuse your cluster credentials directly, e.g. `AGENT_CATALOG_CONN_STRING=${COUCHBASE_ENDPOINT}`
+- For `couchbases://` connections, `AGENT_CATALOG_CONN_ROOT_CERTIFICATE` falls back to the `certifi` bundle automatically (Capella certs are publicly signed), so it's only needed for a self-managed cluster with a private CA
+
+Once published, set `GUEST_RECOVERY_USE_AGENTC=true` in `.env` and restart the worker to have it pull `guest_recovery_system_prompt` from the catalog. Leave it `false` to keep using the built-in default prompt.
+
+### 4. Manual setup (archived)
 
 Original Query Workbench and Capella UI instructions are preserved in **[docs/README.manual-setup.md](docs/README.manual-setup.md)**.
 
@@ -192,6 +218,7 @@ First-time seed only (empty incidents collection): `npx tsx scripts/demo-reset-i
 | `npm run lint` | Run ESLint |
 | `npm test` | Run Vitest unit tests |
 | `npm run demo:setup-cluster` | Full cluster setup: schema → eventing → seed → vector indexes |
+| `npm run demo:setup-agentc` | Init/index/publish the Agent Catalog (`agentc`) — requires a clean git tree |
 | `npm run demo:setup-schema` | Scopes, collections, primary indexes only |
 | `npm run demo:setup-eventing` | Deploy Eventing functions (REST; use `-- --driver=cli` for couchbase-cli) |
 | `npm run demo:setup-vector-indexes` | GSI + Search hybrid vector indexes (run **after** seed data) |

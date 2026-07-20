@@ -38,3 +38,6 @@ database/generated/
 .agent-catalog/
 .agent-activity/
 cert.pem
+
+.venv/
+.model-cache/
