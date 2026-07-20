@@ -1,0 +1,3 @@
+[console_scripts]
+agentc=agentc_cli.main:main
+

@@ -8,6 +8,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping
 
+import agentc
 import couchbase.search as search
 from couchbase.auth import PasswordAuthenticator
 from couchbase.cluster import Cluster
@@ -57,6 +58,7 @@ class Settings:
     openai_model: str
     openai_embed_model: str
     playbook_index_name: str
+    use_agentc: bool
 
 
 @dataclass(frozen=True)
@@ -79,6 +81,7 @@ def get_settings() -> Settings:
         openai_model=os.getenv("OPENAI_MODEL", "gpt-4o"),
         openai_embed_model=get_required_env("OPENAI_EMBEDDING_MODEL"),
         playbook_index_name=get_required_env("CB_PLAYBOOK_VECTOR_INDEX"),
+        use_agentc=os.getenv("GUEST_RECOVERY_USE_AGENTC", "false").strip().lower() == "true",
     )
 
 
@@ -90,6 +93,43 @@ def create_cluster(settings: Settings) -> Cluster:
 @lru_cache(maxsize=1)
 def create_openai_client(settings: Settings) -> OpenAI:
     return OpenAI(api_key=settings.openai_api_key)
+
+
+@lru_cache(maxsize=1)
+def get_agentc_catalog() -> agentc.Catalog:
+    return agentc.Catalog()
+
+
+_DEFAULT_SYSTEM_MESSAGE = (
+    "You are the VoyageOps Guest Recovery Agent. "
+    "Select one approved recovery action from the eligible catalog and explain why it is the best fit. "
+    "Also provide interactive alternatives and follow-up prompts an operator can use immediately. "
+    "Strictly adhere to policy rules. "
+    "Return valid JSON only."
+)
+
+
+def _resolve_system_message(settings: Settings) -> str:
+    if not settings.use_agentc:
+        return _DEFAULT_SYSTEM_MESSAGE
+
+    try:
+        catalog = get_agentc_catalog()
+        result = catalog.find(kind="prompt", name="guest_recovery_system_prompt")
+    except Exception as error:
+        raise AgentWorkerError("agentc_prompt", f"Unable to reach Agent Catalog for prompt lookup: {error}") from error
+
+    if result is None:
+        raise AgentWorkerError(
+            "agentc_prompt",
+            "Agent Catalog has no published 'guest_recovery_system_prompt' — run `npm run demo:setup-agentc`.",
+        )
+
+    content = result.content
+    if not isinstance(content, str) or not content.strip():
+        raise AgentWorkerError("agentc_prompt", "Agent Catalog prompt 'guest_recovery_system_prompt' has no text content")
+
+    return content.strip()
 
 
 def _utc_now_iso() -> str:
@@ -228,7 +268,9 @@ def _fetch_incident_context(cluster: Cluster, incident_id: str) -> dict[str, Any
     return dict(rows[0])
 
 
+@agentc.catalog.tool
 def _create_incident_embedding(client: OpenAI, settings: Settings, description: str) -> list[float]:
+    """Create an OpenAI embedding vector for an incident description, for playbook vector search."""
     try:
         embedding_response = client.embeddings.create(
             input=description,
@@ -420,12 +462,14 @@ def _ensure_playbook_embedding_is_valid(cluster: Cluster, playbook_id: str) -> N
         )
 
 
+@agentc.catalog.tool
 def _find_playbook_id(
     cluster: Cluster,
     index_name: str,
     incident_vector: list[float],
     bucket_name: str,
 ) -> str:
+    """Find the best-matching active playbook for an incident via vector search (FTS, falling back to GSI)."""
     available_indexes = _list_search_index_names(cluster)
     fts_index_name = _resolve_playbook_search_index_name(index_name, available_indexes, bucket_name)
 
@@ -468,7 +512,9 @@ def _find_playbook_id(
     return _find_playbook_id_via_gsi(cluster, index_name, incident_vector)
 
 
+@agentc.catalog.tool
 def _fetch_actions_and_policies(cluster: Cluster, playbook_id: str, loyalty_tier: str) -> ActionPolicyLoadResult:
+    """Load eligible recovery actions and enabled policy rules for a playbook and guest loyalty tier."""
     eligible_actions_query = """
     SELECT a.actionId,
            a.label,
@@ -673,7 +719,12 @@ def _fetch_actions_and_policies(cluster: Cluster, playbook_id: str, loyalty_tier
     return ActionPolicyLoadResult(actions=actions, policies=policies)
 
 
-def _build_prompt(context: Mapping[str, Any], actions: list[dict[str, Any]], policies: list[dict[str, Any]]) -> tuple[str, str]:
+def _build_prompt(
+    context: Mapping[str, Any],
+    actions: list[dict[str, Any]],
+    policies: list[dict[str, Any]],
+    system_message: str,
+) -> tuple[str, str]:
     recent_incidents = int(context.get("recentIncidents") or 0)
     loyalty_tier = str(context.get("loyaltyTier") or "GOLD").upper()
     onboard_spend = float(context.get("onboardSpend") or 0)
@@ -720,13 +771,6 @@ def _build_prompt(context: Mapping[str, Any], actions: list[dict[str, Any]], pol
     ranked_actions = sorted(actions, key=_action_rank, reverse=True)
     shortlist = ranked_actions[: min(5, len(ranked_actions))]
 
-    system_message = (
-        "You are the VoyageOps Guest Recovery Agent. "
-        "Select one approved recovery action from the eligible catalog and explain why it is the best fit. "
-        "Also provide interactive alternatives and follow-up prompts an operator can use immediately. "
-        "Strictly adhere to policy rules. "
-        "Return valid JSON only."
-    )
     user_prompt = json.dumps(
         {
             "incident": {
@@ -939,7 +983,8 @@ def _generate_recommendation(
     actions: list[dict[str, Any]],
     policies: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    system_message, user_prompt = _build_prompt(context, actions, policies)
+    system_message = _resolve_system_message(settings)
+    _, user_prompt = _build_prompt(context, actions, policies, system_message)
 
     base_messages = [
         {"role": "system", "content": system_message},

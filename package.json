@@ -24,7 +24,8 @@
     "demo:setup-vector-indexes": "npx tsx scripts/setup-vector-indexes.ts",
     "demo:setup-search-indexes": "npx tsx scripts/setup-search-indexes.ts",
     "demo:setup-eventing": "npx tsx scripts/setup-eventing.ts",
-    "demo:setup-cluster": "npx tsx scripts/setup-cluster.ts"
+    "demo:setup-cluster": "npx tsx scripts/setup-cluster.ts",
+    "demo:setup-agentc": "npx tsx scripts/setup-agentc.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

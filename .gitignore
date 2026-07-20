@@ -33,3 +33,8 @@ backend/python/guest_recovery/__pyc*
 
 data/*2
 database/generated/
+
+# Couchbase Agent Catalog (agentc) local index + activity
+.agent-catalog/
+.agent-activity/
+cert.pem
