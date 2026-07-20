@@ -2,11 +2,12 @@ import json
 import logging
 import os
 import sys
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 import agentc
 import couchbase.search as search
@@ -98,6 +99,84 @@ def create_openai_client(settings: Settings) -> OpenAI:
 @lru_cache(maxsize=1)
 def get_agentc_catalog() -> agentc.Catalog:
     return agentc.Catalog()
+
+
+class _NullSpan:
+    """No-op stand-in for agentc.Span, used when GUEST_RECOVERY_USE_AGENTC is off (or Agent Catalog
+    is unreachable) so call sites can log unconditionally instead of branching on settings.use_agentc."""
+
+    def __enter__(self) -> "_NullSpan":
+        return self
+
+    def __exit__(self, *_exc: Any) -> bool:
+        return False
+
+    def new(self, *_args: Any, **_kwargs: Any) -> "_NullSpan":
+        return self
+
+    def log(self, *_args: Any, **_kwargs: Any) -> None:
+        pass
+
+
+def _get_root_span(settings: Settings, run_id: str, incident_id: str, guest_id: str) -> Any:
+    """One root Span per agent run, named/sessioned by run_id so Capella's Agent Tracer groups a
+    run's tool calls and LLM reasoning together. Falls back to a no-op span on any failure so
+    tracing can never break a run."""
+    if not settings.use_agentc:
+        return _NullSpan()
+
+    try:
+        catalog = get_agentc_catalog()
+        return catalog.Span(
+            name="guest_recovery_run",
+            session=run_id,
+            state={"incidentId": incident_id, "guestId": guest_id},
+        )
+    except Exception as error:
+        LOGGER.warning("Agent Catalog span init failed; continuing without activity tracing: %s", error)
+        return _NullSpan()
+
+
+def _traced_tool_call(
+    span: Any,
+    tool_name: str,
+    tool_args: Mapping[str, Any],
+    fn: Callable[..., Any],
+    *args: Any,
+    result_summary: Callable[[Any], Any] | None = None,
+    **kwargs: Any,
+) -> Any:
+    """Invoke `fn` inside a child span, logging a ToolCall/ToolResult pair around it so the
+    invocation shows up in Agent Catalog activity. `result_summary`, if given, controls what gets
+    logged as the result (e.g. a length instead of a raw embedding vector)."""
+    tool_call_id = uuid.uuid4().hex
+    with span.new(name=tool_name) as tool_span:
+        tool_span.log(
+            content=agentc.span.ToolCallContent(
+                tool_name=tool_name,
+                tool_args=dict(tool_args),
+                tool_call_id=tool_call_id,
+            )
+        )
+        try:
+            result = fn(*args, **kwargs)
+        except Exception as error:
+            tool_span.log(
+                content=agentc.span.ToolResultContent(
+                    tool_call_id=tool_call_id,
+                    tool_result=str(error),
+                    status="error",
+                )
+            )
+            raise
+
+        tool_span.log(
+            content=agentc.span.ToolResultContent(
+                tool_call_id=tool_call_id,
+                tool_result=result_summary(result) if result_summary else result,
+            )
+        )
+        return result
 
 
 _DEFAULT_SYSTEM_MESSAGE = (
@@ -982,6 +1061,7 @@ def _generate_recommendation(
     context: Mapping[str, Any],
     actions: list[dict[str, Any]],
     policies: list[dict[str, Any]],
+    span: Any,
 ) -> dict[str, Any]:
     system_message = _resolve_system_message(settings)
     _, user_prompt = _build_prompt(context, actions, policies, system_message)
@@ -992,19 +1072,26 @@ def _generate_recommendation(
     ]
 
     def _run_completion(messages: list[dict[str, str]]) -> str:
-        try:
-            response = client.chat.completions.create(
-                model=settings.openai_model,
-                messages=messages,
-                response_format={"type": "json_object"},
-            )
-        except Exception as error:
-            raise AgentWorkerError("llm_reasoning", f"OpenAI completion failed: {error}") from error
+        with span.new(name="llm_reasoning") as llm_span:
+            llm_span.log(content=agentc.span.SystemContent(value=messages[0]["content"]))
+            llm_span.log(content=agentc.span.UserContent(value=messages[-1]["content"]))
+            try:
+                response = client.chat.completions.create(
+                    model=settings.openai_model,
+                    messages=messages,
+                    response_format={"type": "json_object"},
+                )
+            except Exception as error:
+                llm_span.log(content=agentc.span.KeyValueContent(key="error", value=str(error)))
+                raise AgentWorkerError("llm_reasoning", f"OpenAI completion failed: {error}") from error
 
-        message_content = response.choices[0].message.content if response.choices else None
-        if not message_content:
-            raise AgentWorkerError("llm_reasoning", "OpenAI completion returned no content")
-        return message_content
+            message_content = response.choices[0].message.content if response.choices else None
+            if not message_content:
+                llm_span.log(content=agentc.span.KeyValueContent(key="error", value="empty completion"))
+                raise AgentWorkerError("llm_reasoning", "OpenAI completion returned no content")
+
+            llm_span.log(content=agentc.span.ChatCompletionContent(output=message_content))
+            return message_content
 
     first_content = _run_completion(base_messages)
     try:
@@ -1199,54 +1286,95 @@ def run_guest_recovery_agent(
             step="load_run",
         )
 
-        context = _fetch_incident_context(resolved_cluster, str(run_document["incidentId"]))
-        playbook_id = _find_playbook_id_from_context(resolved_cluster, context)
-        if playbook_id:
-            _emit_worker_metric(
-                "playbook_context_match_used",
-                playbookId=playbook_id,
-                incidentType=str(context.get("type") or ""),
-                severity=str(context.get("severity") or ""),
-                loyaltyTier=str(context.get("loyaltyTier") or ""),
-            )
-        else:
-            incident_vector = _extract_incident_vector_from_context(context)
-            if incident_vector:
+        root_span = _get_root_span(
+            settings, run_id, str(run_document["incidentId"]), str(run_document["guestId"])
+        )
+        with root_span as span:
+            context = _fetch_incident_context(resolved_cluster, str(run_document["incidentId"]))
+            playbook_id = _find_playbook_id_from_context(resolved_cluster, context)
+            if playbook_id:
                 _emit_worker_metric(
-                    "playbook_vector_source",
-                    source="incident_document",
-                    vectorLength=len(incident_vector),
-                    incidentId=str(context.get("incidentId") or ""),
+                    "playbook_context_match_used",
+                    playbookId=playbook_id,
+                    incidentType=str(context.get("type") or ""),
+                    severity=str(context.get("severity") or ""),
+                    loyaltyTier=str(context.get("loyaltyTier") or ""),
                 )
             else:
-                incident_vector = _create_incident_embedding(openai_client, settings, str(context["description"]))
-                _emit_worker_metric(
-                    "playbook_vector_source",
-                    source="openai_runtime",
-                    incidentId=str(context.get("incidentId") or ""),
+                incident_vector = _extract_incident_vector_from_context(context)
+                if incident_vector:
+                    _emit_worker_metric(
+                        "playbook_vector_source",
+                        source="incident_document",
+                        vectorLength=len(incident_vector),
+                        incidentId=str(context.get("incidentId") or ""),
+                    )
+                else:
+                    incident_vector = _traced_tool_call(
+                        span,
+                        "create_incident_embedding",
+                        {"description": str(context["description"])[:200], "model": settings.openai_embed_model},
+                        _create_incident_embedding,
+                        openai_client,
+                        settings,
+                        str(context["description"]),
+                        result_summary=lambda vector: {"vectorLength": len(vector)},
+                    )
+                    _emit_worker_metric(
+                        "playbook_vector_source",
+                        source="openai_runtime",
+                        incidentId=str(context.get("incidentId") or ""),
+                    )
+                playbook_id = _traced_tool_call(
+                    span,
+                    "find_playbook_id",
+                    {
+                        "indexName": settings.playbook_index_name,
+                        "bucketName": settings.couchbase_bucket,
+                        "vectorLength": len(incident_vector),
+                    },
+                    _find_playbook_id,
+                    resolved_cluster,
+                    settings.playbook_index_name,
+                    incident_vector,
+                    settings.couchbase_bucket,
                 )
-            playbook_id = _find_playbook_id(
+            action_policy_result = _traced_tool_call(
+                span,
+                "fetch_actions_and_policies",
+                {"playbookId": playbook_id, "loyaltyTier": str(context["loyaltyTier"])},
+                _fetch_actions_and_policies,
                 resolved_cluster,
-                settings.playbook_index_name,
-                incident_vector,
-                settings.couchbase_bucket,
+                playbook_id,
+                str(context["loyaltyTier"]),
+                result_summary=lambda result: {
+                    "actionCount": len(result.actions),
+                    "policyCount": len(result.policies),
+                    "coverageGapReason": result.coverage_gap_reason,
+                },
             )
-        action_policy_result = _fetch_actions_and_policies(resolved_cluster, playbook_id, str(context["loyaltyTier"]))
-        actions = action_policy_result.actions
-        policies = action_policy_result.policies
-        if action_policy_result.coverage_gap_reason:
-            recommendation = _build_coverage_gap_recommendation(context, playbook_id, policies)
-            _emit_worker_metric(
-                "coverage_gap_drafts_created",
-                incidentId=str(context.get("incidentId") or ""),
-                guestId=str(context.get("guestId") or ""),
-                playbookId=playbook_id,
-                reason=action_policy_result.coverage_gap_reason,
+            actions = action_policy_result.actions
+            policies = action_policy_result.policies
+            if action_policy_result.coverage_gap_reason:
+                recommendation = _build_coverage_gap_recommendation(context, playbook_id, policies)
+                _emit_worker_metric(
+                    "coverage_gap_drafts_created",
+                    incidentId=str(context.get("incidentId") or ""),
+                    guestId=str(context.get("guestId") or ""),
+                    playbookId=playbook_id,
+                    reason=action_policy_result.coverage_gap_reason,
+                )
+            else:
+                recommendation = _generate_recommendation(
+                    openai_client, settings, context, actions, policies, span=span
+                )
+            proposal_id = _write_proposal(collections["action_proposals"], run_document, recommendation)
+            next_status = (
+                "coverage_gap_drafts_ready"
+                if recommendation.get("status") == "coverage_gap_drafts_ready"
+                else "awaiting_approval"
             )
-        else:
-            recommendation = _generate_recommendation(openai_client, settings, context, actions, policies)
-        proposal_id = _write_proposal(collections["action_proposals"], run_document, recommendation)
-        next_status = "coverage_gap_drafts_ready" if recommendation.get("status") == "coverage_gap_drafts_ready" else "awaiting_approval"
+            span.log(content=agentc.span.KeyValueContent(key="proposalId", value=proposal_id))
 
         _update_run_status(
             collections["agent_runs"],
