@@ -198,7 +198,7 @@ Open the app at **http://localhost:8080**.
 
 On **Guest Recovery**, the center column (Top-10 guest queue) and the right column (chat-focused incident) can both list the same worker proposal when the selected guest’s open incident matches the incident you are viewing in chat. Each column uses the same approval control; approving either updates the same Couchbase proposal document.
 
-### Terminal 3 — (When ready) Python worker
+### Terminal 2 — (When ready) Python worker
 
 ```sh
 npm run demo:worker
