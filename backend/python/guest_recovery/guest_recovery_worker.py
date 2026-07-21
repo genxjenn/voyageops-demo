@@ -348,6 +348,35 @@ def _fetch_incident_context(cluster: Cluster, incident_id: str) -> dict[str, Any
 
 
 @agentc.catalog.tool
+def _analyze_guest_sentiment(cluster: Cluster, incident_id: str, description: str) -> str | None:
+    """Run Couchbase's ai_sentiment AI Function over the incident description and persist the
+    result onto the incident document as guestSentiment. Best-effort: if AI Functions aren't
+    enabled/reachable on this cluster, logs a warning and returns None instead of failing the run."""
+    query = """
+    UPDATE voyageops.guests.incidents AS i
+    SET i.guestSentiment = default:ai_sentiment({"text": $description, "temperature": 0.3, "max_tokens": 100})[0].response,
+        i.updatedAt = $now
+    WHERE META(i).id = $incidentId OR i.incidentId = $incidentId
+    RETURNING i.guestSentiment
+    """
+
+    try:
+        result = cluster.query(
+            query,
+            QueryOptions(
+                named_parameters={"description": description, "incidentId": incident_id, "now": _utc_now_iso()}
+            ),
+        )
+        rows = list(result.rows())
+    except Exception as error:
+        LOGGER.warning("ai_sentiment analysis skipped for incident %s: %s", incident_id, error)
+        return None
+
+    sentiment = rows[0].get("guestSentiment") if rows else None
+    return str(sentiment) if sentiment else None
+
+
+@agentc.catalog.tool
 def _create_incident_embedding(client: OpenAI, settings: Settings, description: str) -> list[float]:
     """Create an OpenAI embedding vector for an incident description, for playbook vector search."""
     try:
@@ -859,6 +888,7 @@ def _build_prompt(
                 "category": context.get("category"),
                 "type": context.get("type"),
                 "status": context.get("status"),
+                "guestSentiment": context.get("guestSentiment"),
             },
             "guest": {
                 "guestId": context["guestId"],
@@ -1291,6 +1321,17 @@ def run_guest_recovery_agent(
         )
         with root_span as span:
             context = _fetch_incident_context(resolved_cluster, str(run_document["incidentId"]))
+            sentiment = _traced_tool_call(
+                span,
+                "analyze_guest_sentiment",
+                {"incidentId": str(context.get("incidentId") or ""), "description": str(context.get("description") or "")[:200]},
+                _analyze_guest_sentiment,
+                resolved_cluster,
+                str(context["incidentId"]),
+                str(context["description"]),
+            )
+            if sentiment:
+                context["guestSentiment"] = sentiment
             playbook_id = _find_playbook_id_from_context(resolved_cluster, context)
             if playbook_id:
                 _emit_worker_metric(

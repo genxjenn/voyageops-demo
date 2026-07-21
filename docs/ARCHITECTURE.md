@@ -1,8 +1,8 @@
 # VoyageOps AI — Architecture & Design Specification
 
-> **Version:** 1.3 · **Last Updated:** May 2026  
+> **Version:** 1.4 · **Last Updated:** July 2026  
 > **Platform:** Acme Cruise Line · MS Acme Voyager  
-> **Status:** Phase 2 active — live Couchbase backend, Guest Recovery LLM chat, Python worker proposals, operator approval API, and live dashboard polling.
+> **Status:** Phase 2 active — live Couchbase backend, Guest Recovery LLM chat, Python worker proposals, Couchbase Agent Catalog activity tracing, Couchbase AI Functions (guest sentiment), operator approval API, and live dashboard polling.
 
 ---
 
@@ -72,6 +72,8 @@ VoyageOps AI is an AI-powered operational intelligence platform for cruise line 
 | **Worker Runtime** | Python + Couchbase SDK | Guest Recovery agent run polling and proposal generation |
 | **Database** | Couchbase Capella | Operational JSON documents, SQL++, Eventing, vector indexes |
 | **LLM** | OpenAI chat + embeddings | Guest Recovery chat and worker reasoning |
+| **Agent Catalog** | Couchbase Agent Catalog (`agentc` 1.1.2) | Versioned prompt/tool catalog; `Span`-based activity tracing of worker tool calls and LLM reasoning, viewable in Capella's Agent Tracer |
+| **AI Functions** | Couchbase SQL++ AI Functions (`default:ai_sentiment`) | Guest sentiment analysis on incident descriptions, persisted to the incident document |
 
 ### Architecture Diagram
 
@@ -216,9 +218,10 @@ Proxy: browser `http://localhost:8080/api/*` → `http://localhost:5173/api/*`.
 
 **Worker pipeline (production):**
 - Open incident → Capella Eventing → pending `agent_runs`
-- Python worker polls, resolves playbook + catalog + policies, LLM JSON plan → `action_proposals`
+- Python worker polls, analyzes guest sentiment (Couchbase AI Function), resolves playbook + catalog + policies, LLM JSON plan → `action_proposals`
 - Coverage-gap path when no eligible catalog actions (`coverage_gap_drafts_ready`)
 - Operator **Approve** → updates proposal + incident status + execution stub (full outcomes analytics still Phase 3)
+- Every run is traced end-to-end via an `agentc.Span` (see §6.4, "Agent Catalog & Activity Tracing" below), visible in Capella's Agent Tracer
 
 **Guest selection sync:** `selectedChatIncidentId` resets only when the selected **guest** changes (`lastSyncedGuestIdRef`), not on every prioritized-incidents refetch (~10s).
 
@@ -272,7 +275,7 @@ Guest Recovery reads live Couchbase data through `/api/*`, with mock fallbacks i
 |---|---|---|
 | `Guest` | id, name, email, loyaltyTier, loyaltyNumber, cabinNumber, bookingId, onboardSpend, sailingHistory | GuestRecoveryAgent |
 | `Booking` | id, guestId, shipName, voyageNumber, departureDate, returnDate, cabinType, cabinNumber, totalValue, status | (Available for expansion) |
-| `Incident` | id, guestId, type, category, description, severity, status, createdAt, updatedAt | Dashboard, GuestRecoveryAgent |
+| `Incident` | id, guestId, type, category, description, severity, status, createdAt, updatedAt, guestSentiment (via Couchbase AI Function, best-effort) | Dashboard, GuestRecoveryAgent |
 | `Excursion` | id, name, port, date, time, capacity, booked, pricePerPerson, status, vendor | Seed data / API (optional) |
 | `Venue` | id, name, type, deck, capacity, currentOccupancy, waitTime, staffCount, optimalStaff, status | GuestRecoveryAgent (context), seed |
 | `AgentRecommendation` | id, agentType, title, summary, reasoning, dataSourcesUsed[], confidence, impact, status, actions[], createdAt, relatedEntityId/Type | Dashboard, GuestRecoveryAgent |
@@ -337,6 +340,8 @@ Incident created (status=open)
      ↓
   Backend worker polls agent_runs WHERE status="pending"← IMPLEMENTED
      ↓
+  Guest sentiment analysis (Couchbase AI Function)      ← IMPLEMENTED
+     ↓
   Resolve incident, guest, playbook, actions, policies  ← IMPLEMENTED
      ↓
   LLM prompt assembly + chat/completions call           ← IMPLEMENTED
@@ -360,6 +365,39 @@ Incident created (status=open)
 | `action_catalog` | Lookup library of recovery actions | **YES** (embedding) |
 | `playbooks` | Workflow templates combining actions | **YES** (embedding) |
 | `policy_rules` | Constraints & guardrails | NO |
+| `outcomes` | Post-execution measurement results | **YES** (embedding, index created — collection not yet written to; Phase 3) |
+
+### Collections in Agent Catalog / Activity Scopes
+
+| Collection | Scope | Purpose |
+|---|---|---|
+| `metadata`, `tools`, `prompts` | `agent_catalog` | Versioned Agent Catalog (`agentc`) — the Guest Recovery worker's system prompt and its 4 catalog tools (`create_incident_embedding`, `find_playbook_id`, `fetch_actions_and_policies`, `analyze_guest_sentiment`) |
+| `logs` | `agent_activity` | Per-run `Span` activity trace (tool calls/results, LLM system/user/completion content, span begin/end) — read by Capella's Agent Tracer |
+
+### 6.4 Agent Catalog & Activity Tracing (`agentc`)
+
+When `GUEST_RECOVERY_USE_AGENTC=true`, the Guest Recovery worker (`backend/python/guest_recovery/guest_recovery_worker.py`):
+
+- Loads its system prompt from the published `guest_recovery_system_prompt` in Agent Catalog instead of the built-in default (`npm run demo:setup-agentc` publishes it; requires a clean git working tree).
+- Opens one root `agentc.Span` per agent run (`session=run_id`), so Capella's Agent Tracer groups a run's activity together.
+- Traces each catalog tool (`analyze_guest_sentiment`, `create_incident_embedding`, `find_playbook_id`, `fetch_actions_and_policies`) with `ToolCall`/`ToolResult` logging.
+- Traces each OpenAI call in `_generate_recommendation` with `System`/`User`/`ChatCompletion` content logging (including the retry-on-invalid-actionId path).
+
+When the flag is off (or Agent Catalog is unreachable), a `_NullSpan` no-op stands in for every span call, so tracing can never break a run. A local `.git/hooks/post-commit` hook (generated by `agentc init --add-hook-for backend/python/guest_recovery`, not tracked by git) re-indexes and republishes the catalog after every commit — see [README.md](../README.md) for the corrected hook script (the `agentc`-generated default omits the venv path and source directory).
+
+### 6.5 Couchbase AI Functions
+
+`_analyze_guest_sentiment` (a catalog tool) calls Couchbase's native SQL++ AI Function directly in a single `UPDATE ... RETURNING`:
+
+```sql
+UPDATE voyageops.guests.incidents AS i
+SET i.guestSentiment = default:ai_sentiment({"text": $description, "temperature": 0.3, "max_tokens": 100})[0].response,
+    i.updatedAt = $now
+WHERE META(i).id = $incidentId OR i.incidentId = $incidentId
+RETURNING i.guestSentiment
+```
+
+This persists `guestSentiment` (`positive` / `neutral` / `negative` / `unknown`) onto the incident document and threads it into the LLM prompt (`_build_prompt`) as extra context. It is best-effort: any failure (missing `query_execute_global_functions` role on the cluster credential, AI Functions not enabled on the cluster tier) is caught, logged, and the run proceeds without the field — it never blocks proposal generation. AI Functions require a paid Capella Developer Pro/Enterprise cluster (Server 8.0+) with a model provider bound via the Capella UI, and the `query_execute_global_functions` role granted to the connecting database credential.
 
 ### Proposal Statuses
 
@@ -693,6 +731,8 @@ Legacy agent routes (`/port-disruption`, `/onboard-ops`) redirect to `/` for boo
 | **Eventing** | Document change triggers for agent activation |
 | **Guest Recovery Chat** | Conversational LLM response with structured guidance and missing-artifact drafts |
 | **Worker Loop** | Python worker processes `agent_runs` and writes `action_proposals` |
+| **Agent Catalog Tracing** | `agentc` `Span`-based tracing of worker tool calls + LLM reasoning, viewable in Capella's Agent Tracer (`GUEST_RECOVERY_USE_AGENTC=true`) |
+| **AI Functions** | Couchbase `default:ai_sentiment` on incident descriptions, persisted as `guestSentiment` |
 | **Operator Approval** | `POST /api/action-proposals/:id/approve` updates proposal and incident |
 | **Live Dashboard** | React Query polling for KPIs, incidents, proposals |
 | **Replication** | XDCR for multi-region fleet sync (target) |
@@ -758,6 +798,17 @@ Legacy agent routes (`/port-disruption`, `/onboard-ops`) redirect to `/` for boo
 | `GUEST_RECOVERY_CHAT_VERBOSITY` | `concise`, `normal`, or `detailed` chat response style |
 | `GUEST_RECOVERY_QUERY_TIMEOUT_SECONDS` | Worker pending-run query timeout |
 | `GUEST_RECOVERY_POLL_MAX_ATTEMPTS` | Worker pending-run retry attempts |
+| `GUEST_RECOVERY_POLL_SECONDS` | Worker loop poll interval |
+| `GUEST_RECOVERY_POLL_BATCH_SIZE` | Max pending runs fetched per poll |
+| `GUEST_RECOVERY_WORKER_THREADS` | Worker thread-pool size for concurrent run processing |
+| `CB_VECTOR_INDEX_CATEGORY` / `CB_VECTOR_INDEX_TYPE` / `CB_VECTOR_INDEX_DESC` | Incident GSI vector index names used by chat retrieval (`searchIncidentsByVectorIndexes`) |
+| `CB_PLAYBOOK_VECTOR_INDEX` | Playbook FTS vector index name (worker resolves scoped Capella name automatically; falls back to GSI) |
+| `CB_VECTOR_INDEX_OUTCOMES` | Outcomes GSI vector index name (index created; collection not yet written to — Phase 3) |
+| `GUEST_RECOVERY_USE_AGENTC` | `true` to source the worker's system prompt from Agent Catalog and enable `Span` activity tracing; `false` (default) uses the built-in prompt and a no-op tracer |
+| `AGENT_CATALOG_CONN_STRING` / `AGENT_CATALOG_USERNAME` / `AGENT_CATALOG_PASSWORD` / `AGENT_CATALOG_BUCKET` | `agentc` cluster credentials (support `${VAR}` interpolation to reuse `COUCHBASE_*` values) |
+| `AGENT_CATALOG_CATALOG` / `AGENT_CATALOG_ACTIVITY` | Local catalog/activity folder names (`.agent-catalog`, `.agent-activity`) |
+| `AGENT_CATALOG_CONN_ROOT_CERTIFICATE` | Root CA for `couchbases://` — falls back to the `certifi` bundle automatically on Capella |
+| `WORKER_API_URL` | Base URL the worker posts live log lines to (default `http://localhost:5173`) |
 | `PORT` | Express listen port (default `5173`) |
 | `VITE_API_BASE_URL` | Optional absolute API base (empty = same-origin `/api` via proxy) |
 
@@ -811,8 +862,15 @@ Removed from product (redirect only): `PortDisruptionAgent`, `OnboardOpsAgent`.
 | `src/components/KPICard.tsx` | — | KPI metric card (`compact` on dashboard) |
 | `src/components/StatusBadge.tsx` | — | Universal status pill |
 | `src/lib/api.ts` | ~390 | API client + `useLiveDashboardData` |
-| `src/api/routes.ts` | ~2600 | Express routes (incidents, agent-query, proposals, worker-logs) |
+| `src/api/routes.ts` | ~2740 | Express routes (incidents, agent-query, proposals, worker-logs) |
 | `src/components/ui/*` | ~50 files | shadcn/ui primitives |
+
+### Backend Worker (Python)
+
+| File | Lines (approx.) | Description |
+|---|---|---|
+| `backend/python/guest_recovery/guest_recovery_worker.py` | ~1460 | Core agent logic: incident context, guest sentiment (AI Function), playbook/catalog/policy resolution, LLM recommendation, proposal write, `agentc.Span` tracing |
+| `backend/python/guest_recovery/run_worker_loop.py` | ~260 | Polling loop, PID guard, live log POST to `/api/worker-logs` |
 
 ### Data & Config
 
