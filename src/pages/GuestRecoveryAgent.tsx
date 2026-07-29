@@ -594,7 +594,7 @@ const GuestRecoveryAgent = () => {
         input.proposalId,
         input.chatPreviewOverlay ? { chatPreviewOverlay: input.chatPreviewOverlay } : undefined,
       ),
-    onSuccess: async () => {
+    onSuccess: async (data) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["incidents"] }),
         queryClient.invalidateQueries({ queryKey: ["incidents", "prioritized", "guest-recovery"] }),
@@ -603,6 +603,14 @@ const GuestRecoveryAgent = () => {
         queryClient.invalidateQueries({ queryKey: ["proposals", selectedGuestId] }),
         queryClient.invalidateQueries({ queryKey: ["proposals", "chat-focused"] }),
       ]);
+      // Approving the currently-focused incident clears the pin so effectivePlanIncidentId
+      // falls through to incidentIdForProposal and advances to the guest's next open incident.
+      setSelectedChatIncidentId((current) =>
+        current &&
+        normalizeIncidentIdForAlternatesScope(current) === normalizeIncidentIdForAlternatesScope(data.incidentId)
+          ? null
+          : current,
+      );
       toast.success("Action plan approved", { description: "The recovery plan has been queued for execution." });
     },
     onError: (error) => {
